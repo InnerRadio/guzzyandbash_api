@@ -1,0 +1,12 @@
+[0;1;32m●[0m supervisor.service - Supervisor process control system for UNIX
+     Loaded: loaded (]8;;file://srv846862/usr/lib/systemd/system/supervisor.service/usr/lib/systemd/system/supervisor.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Wed 2025-06-11 03:30:08 UTC; 35ms ago
+       Docs: ]8;;http://supervisord.orghttp://supervisord.org]8;;
+   Main PID: 25111 (supervisord)
+      Tasks: 1 (limit: 4655)
+     Memory: 3.4M (peak: 3.5M)
+        CPU: 13ms
+     CGroup: /system.slice/supervisor.service
+             └─[0;38;5;245m25111 /usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf[0m
+
+Jun 11 03:30:08 srv846862 systemd[1]: Started supervisor.service - Supervisor process control system for UNIX.

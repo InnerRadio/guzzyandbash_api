@@ -1,0 +1,11 @@
+fastapi>=0.109.0
+uvicorn[standard]>=0.20.0
+SQLAlchemy>=2.0.0
+PyMySQL>=1.0.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+typing_extensions>=4.0.0
+passlib[bcrypt]>=1.7.4 # For password hashing
+python-jose[cryptography]>=3.3.0 # For JWT authentication
+xrpl-py>=1.7.0 # For XRPL operations
+alembic>=1.10.0 # For database migrations - NEWLY ADDED
