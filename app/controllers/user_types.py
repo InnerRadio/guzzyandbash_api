@@ -10,13 +10,13 @@ from ..database import get_db
 # Models and Schemas are in app/models/user.py
 from ..models.user import UserTypeOption, UserTypeOptionResponse
 
-router = APIRouter()
+router = APIRouter(tags=["User Types"]) # MODIFIED: Added tags for Swagger UI organization
 
 @router.get(
     "/user-types/options",
     response_model=List[UserTypeOptionResponse],
     summary="Retrieve all available user type options",
-    description="Fetches a list of all dynamically configurable user types (e.g., Artist, Musician).",
+    description="Fetches a list of all dynamically configurable user types (e.g., Artist, Artist, Musician).",
     tags=["User Types"]
 )
 def get_all_user_type_options(db: Session = Depends(get_db)):

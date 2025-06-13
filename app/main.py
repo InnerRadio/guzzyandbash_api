@@ -1,5 +1,18 @@
 # app/main.py
 
+import sys
+try:
+    import bcrypt
+    print(f"DEBUG: sys.path at startup: {sys.path}", file=sys.stderr)
+    print(f"DEBUG: Loaded bcrypt module path: {bcrypt.__file__}", file=sys.stderr)
+    print(f"DEBUG: Loaded bcrypt version: {bcrypt.__version__}", file=sys.stderr)
+except AttributeError:
+    print("DEBUG: bcrypt module loaded, but missing __about__ attribute.", file=sys.stderr)
+except ImportError:
+    print("DEBUG: bcrypt module failed to import.", file=sys.stderr)
+except Exception as e:
+    print(f"DEBUG: An unexpected error occurred during bcrypt import: {e}", file=sys.stderr)
+
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -59,7 +72,7 @@ async def db_session_middleware(request: Request, call_next):
 
 # --- Include your custom API routers here ---
 app.include_router(user_types.router, prefix="/api/v1")
-app.include_router(admin_reports.router, prefix="/api/v1")
-app.include_router(public_reports.router, prefix="/api/v1")
-app.include_router(nft_operations.router, prefix="/api/v1/nft") # CORRECTED LINE: Added '/nft' to the prefix
-app.include_router(auth.router, prefix="/api/auth", tags=["Authentication & Users"]) # Include the authentication router with its prefix and explicit tags!
+app.include_router(admin_reports.router, prefix="/api/v1", tags=["Admin Reports"]) # ADDED TAGS
+app.include_router(public_reports.router, prefix="/api/v1", tags=["Public Reports"]) # ADDED TAGS
+app.include_router(nft_operations.router, prefix="/api/v1/nft", tags=["NFT Operations"]) # ADDED TAGS
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentication & Users"]) # This one was already tagged!
