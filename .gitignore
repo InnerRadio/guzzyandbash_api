@@ -4,3 +4,4 @@ venv/
 __pycache__/
 logs/
 run/
+logs/guzzyandbash_api_stdout.log
