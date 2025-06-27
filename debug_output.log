@@ -1,0 +1,30 @@
+[2025-06-26T05:16:36.774719] get_current_user: Decoded user_id from token: a5aa430b-03d5-44b8-9a10-23af84d93526
+[2025-06-26T05:16:36.791747] get_current_user: Database query for user_id a5aa430b-03d5-44b8-9a10-23af84d93526 resulted in: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:16:36.791853] DEBUG (stderr): User object found: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:16:36.791914] DEBUG (stderr): Type of user object: <class 'app.models.user.User'>
+[2025-06-26T05:16:36.791946] DEBUG (stderr): User object attributes (user.__dict__): {'_sa_instance_state': <sqlalchemy.orm.state.InstanceState object at 0x742a2b9509b0>, 'last_updated_at': datetime.datetime(2025, 6, 25, 13, 9, 3), 'full_name': 'Guzzy Superuser', 'affiliate_id': None, 'email': 'admin@guzzyandbash.com', 'bio': 'Administrator account for Guzzy and Bash Productions API.', 'referring_affiliate_id': None, 'hashed_password': '$2b$12$dcE4FQG6mjxBgG/WHe0WK.1GkupoX9nZW6n8x7RTunHfRozCMsKPe', 'profile_picture_url': '', 'is_active': True, 'social_links': '', 'id': 'a5aa430b-03d5-44b8-9a10-23af84d93526', 'username': 'guzzy_superuser', 'created_at': datetime.datetime(2025, 6, 21, 2, 6, 35), 'role': <UserRole.SUPER_USER: 'Super User'>, 'permissions_level': 'standard_user'}
+[2025-06-26T05:16:36.791967] DEBUG (stderr): Does 'is_active' attribute exist? True
+[2025-06-26T05:16:36.791991] DEBUG (stderr): Value of user.is_active: True
+[2025-06-26T05:16:36.792013] --- END DEBUG ---
+[2025-06-26T05:25:51.614430] get_current_user: Decoded user_id from token: a5aa430b-03d5-44b8-9a10-23af84d93526
+[2025-06-26T05:25:51.631075] get_current_user: Database query for user_id a5aa430b-03d5-44b8-9a10-23af84d93526 resulted in: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:25:51.631426] DEBUG (stderr): User object found: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:25:51.631493] DEBUG (stderr): Type of user object: <class 'app.models.user.User'>
+[2025-06-26T05:25:51.631528] DEBUG (stderr): User object attributes (user.__dict__): {'_sa_instance_state': <sqlalchemy.orm.state.InstanceState object at 0x73891572cdd0>, 'last_updated_at': datetime.datetime(2025, 6, 25, 13, 9, 3), 'full_name': 'Guzzy Superuser', 'affiliate_id': None, 'email': 'admin@guzzyandbash.com', 'bio': 'Administrator account for Guzzy and Bash Productions API.', 'referring_affiliate_id': None, 'hashed_password': '$2b$12$dcE4FQG6mjxBgG/WHe0WK.1GkupoX9nZW6n8x7RTunHfRozCMsKPe', 'profile_picture_url': '', 'is_active': True, 'social_links': '', 'id': 'a5aa430b-03d5-44b8-9a10-23af84d93526', 'username': 'guzzy_superuser', 'created_at': datetime.datetime(2025, 6, 21, 2, 6, 35), 'role': <UserRole.SUPER_USER: 'Super User'>, 'permissions_level': 'standard_user'}
+[2025-06-26T05:25:51.631552] DEBUG (stderr): Does 'is_active' attribute exist? True
+[2025-06-26T05:25:51.631579] DEBUG (stderr): Value of user.is_active: True
+[2025-06-26T05:25:51.631603] --- END DEBUG ---
+[2025-06-26T05:25:51.632340] Entering get_nft_by_token_id for NFT ID: my-nfts, user ID: a5aa430b-03d5-44b8-9a10-23af84d93526
+[2025-06-26T05:25:51.637537] get_nft_by_token_id: NFT with ID my-nfts not found. Raising HTTPException.
+[2025-06-26T05:25:51.637613] get_nft_by_token_id: An error occurred: 404: NFT not found.
+[2025-06-26T05:32:22.199570] get_current_user: JWTError during decode: Signature has expired.. Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhNWFhNDMwYi0wM2Q1LTQ0YjgtOWExMC0yM2FmODRkOTM1MjYiLCJleHAiOjE3NTA5MTU1ODF9.XBmWJG8HFDpkuXESPVlfVO5pKMkwIcdhFJcMQc2O_AQ
+[2025-06-26T05:43:05.257209] get_current_user: Decoded user_id from token: a5aa430b-03d5-44b8-9a10-23af84d93526
+[2025-06-26T05:43:05.259284] get_current_user: Database query for user_id a5aa430b-03d5-44b8-9a10-23af84d93526 resulted in: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:43:05.259495] DEBUG (stderr): User object found: <User(username='guzzy_superuser', email='admin@guzzyandbash.com', role='Super User')>
+[2025-06-26T05:43:05.259573] DEBUG (stderr): Type of user object: <class 'app.models.user.User'>
+[2025-06-26T05:43:05.259599] DEBUG (stderr): User object attributes (user.__dict__): {'_sa_instance_state': <sqlalchemy.orm.state.InstanceState object at 0x7455ae64e870>, 'last_updated_at': datetime.datetime(2025, 6, 25, 13, 9, 3), 'full_name': 'Guzzy Superuser', 'affiliate_id': None, 'email': 'admin@guzzyandbash.com', 'bio': 'Administrator account for Guzzy and Bash Productions API.', 'referring_affiliate_id': None, 'hashed_password': '$2b$12$dcE4FQG6mjxBgG/WHe0WK.1GkupoX9nZW6n8x7RTunHfRozCMsKPe', 'profile_picture_url': '', 'is_active': True, 'social_links': '', 'id': 'a5aa430b-03d5-44b8-9a10-23af84d93526', 'username': 'guzzy_superuser', 'created_at': datetime.datetime(2025, 6, 21, 2, 6, 35), 'role': <UserRole.SUPER_USER: 'Super User'>, 'permissions_level': 'standard_user'}
+[2025-06-26T05:43:05.259615] DEBUG (stderr): Does 'is_active' attribute exist? True
+[2025-06-26T05:43:05.259633] DEBUG (stderr): Value of user.is_active: True
+[2025-06-26T05:43:05.259649] --- END DEBUG ---
+[2025-06-26T05:43:05.259705] Entering get_nfts_by_minter_user for user ID: a5aa430b-03d5-44b8-9a10-23af84d93526
+[2025-06-26T05:43:05.264738] Found 2 NFTs for user ID: a5aa430b-03d5-44b8-9a10-23af84d93526

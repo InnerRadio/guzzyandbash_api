@@ -29,18 +29,22 @@ def get_db():
     finally:
         db.close()
 
-# Database Initialization - Create tables if they don't exist
+# Database Initialization - Tables are managed by Alembic migrations in a production environment
 def init_db():
     try:
-        # ADDED: checkfirst=True to prevent errors if tables already exist
-        Base.metadata.create_all(bind=engine, checkfirst=True)
-        print("Database tables created or already exist.")
+        # In a production environment with Alembic, schema creation/updates are handled by migrations.
+        # Calling create_all here can cause issues if tables already exist or schema has evolved.
+        # This function can be used for initial setup of an empty database or for testing.
+        # If your application relies on Alembic for migrations, this line should typically not be active on every startup.
+        # The 'Table already exists' error indicates this is likely the case.
+        # Base.metadata.create_all(bind=engine, checkfirst=True) # REMOVED/COMMENTED OUT based on protocol and error diagnosis
+        print("Database initialization check complete. Assuming schema managed by Alembic.")
     except OperationalError as e:
-        print(f"Database connection failed or tables could not be created: {e}")
+        print(f"Database connection failed during initialization check: {e}")
         print("Please ensure your database credentials and remote access are correctly configured.")
         # Re-raise the exception to ensure the application doesn't start in an unstable state
         raise
     except Exception as e:
-        print(f"An unexpected error occurred during database initialization: {e}")
+        print(f"An unexpected error occurred during database initialization check: {e}")
         # Re-raise the exception for any other unexpected errors
         raise

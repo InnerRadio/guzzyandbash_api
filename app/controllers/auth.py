@@ -7,7 +7,7 @@ from typing import Optional
 
 # Imports from your database and models
 from ..database import get_db
-from ..models.user import User, UserCreate as ModelUserCreate, UserResponse as ModelUserResponse # Ensure User, UserCreate, UserResponse are imported
+from ..models.user import User, UserCreate as ModelUserCreate, UserResponse as ModelUserResponse
 
 # Imports from your dependencies for authentication logic
 from ..dependencies import get_password_hash, verify_password, create_access_token, get_current_user
@@ -15,9 +15,10 @@ from ..dependencies import get_password_hash, verify_password, create_access_tok
 # Pydantic Models for API Requests/Responses related to Auth
 from pydantic import BaseModel, EmailStr, Field
 
-# Define the router for authentication endpoints with a TAG!
+# Define the router for authentication endpoints with a TAG and the CORRECT PREFIX!
 router = APIRouter(
-    tags=["Authentication & Users"] # Using the more complete tag
+    prefix="/auth", # <--- CRITICAL FIX: ADDED PREFIX HERE!
+    tags=["Authentication & Users"]
 )
 
 class Token(BaseModel):
@@ -27,12 +28,8 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     username: Optional[str] = None
 
-class UserInDB(ModelUserResponse): # Reusing ModelUserResponse from models/user.py
+class UserInDB(ModelUserResponse):
     hashed_password: str
-
-# UserCreate and UserResponse are already imported from ..models.user
-# and should contain the referring_affiliate_id field.
-# So, we don't need to redefine them here if they are already complete in user.py
 
 # --- User Authentication and Authorization Endpoints ---
 
@@ -61,27 +58,23 @@ async def register_user(user: ModelUserCreate, db: Session = Depends(get_db)):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Referring affiliate ID not found."
             )
-        # We need to get the ID (UUID string) of the referring user from their affiliate_id
-        # and assign it to referring_affiliate_id column which is a foreign key to users.id
-        # The User model's referring_affiliate_id expects a users.id (UUID string), not an affiliate_id.
         actual_referring_id = referring_user.id
     else:
         actual_referring_id = None
 
     hashed_password = get_password_hash(user.password)
 
-    # Create new user instance, including the optional referring_affiliate_id
+    # Create new user instance
     db_user = User(
         username=user.username,
         email=user.email,
         hashed_password=hashed_password,
-        full_name=user.full_name, # Added full_name
-        bio=user.bio, # Added bio
-        profile_picture_url=user.profile_picture_url, # Added profile_picture_url
-        social_links=user.social_links, # Added social_links
-        role=user.role if user.role else User.role.default.arg, # Use provided role or default
-        is_active=True, # Default to active
-        # NEW: Assign referring_affiliate_id if provided
+        full_name=user.full_name,
+        bio=user.bio,
+        profile_picture_url=user.profile_picture_url,
+        social_links=user.social_links,
+        role=user.role if user.role else User.role.default.arg,
+        is_active=True,
         referring_affiliate_id=actual_referring_id
     )
 
@@ -101,19 +94,18 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token = create_access_token(data={"sub": str(user.id)})
+    # CRITICAL FIX: Change 'sub' claim from user.id to user.username
+    access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
-# Get Current User
-@router.get("/users/me", response_model=ModelUserResponse)
+# Get Current User - Path adjusted to match documentation
+@router.get("/users/me", response_model=ModelUserResponse) # Path here remains /users/me, combines with /auth prefix to be /auth/users/me
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
-# Get User by ID
-@router.get("/users/{user_id}", response_model=ModelUserResponse)
+# Get User by ID - Path adjusted to match documentation
+@router.get("/users/{user_id}", response_model=ModelUserResponse) # Path here remains /users/{user_id}, combines with /auth prefix to be /auth/users/{user_id}
 async def read_user_by_id(user_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    # Optional: Add authorization check here if only admins/superusers can view any user's profile
-    # For now, allowing any authenticated user to view any user profile by ID
     db_user = db.query(User).filter(User.id == user_id).first()
     if db_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

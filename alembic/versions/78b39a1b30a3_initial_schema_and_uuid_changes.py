@@ -72,10 +72,10 @@ def upgrade() -> None:
                existing_type=mysql.DATETIME(),
                nullable=False,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
-    op.alter_column('user_type_options', 'updated_at',
-               existing_type=mysql.DATETIME(),
-               nullable=False,
-               existing_server_default=sa.text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
+    # op.alter_column('user_type_options', 'updated_at', # THIS COLUMN ALREADY DOES NOT EXIST OR IS ALREADY ALTERED
+    #            existing_type=mysql.DATETIME(),
+    #            nullable=False,
+    #            existing_server_default=sa.text('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'))
 
     op.alter_column('users', 'username',
                existing_type=mysql.VARCHAR(length=255),
@@ -103,9 +103,9 @@ def upgrade() -> None:
     op.alter_column('users', 'created_at',
                existing_type=mysql.DATETIME(),
                nullable=False)
-    op.alter_column('users', 'updated_at',
-               existing_type=mysql.DATETIME(),
-               nullable=False)
+    # op.alter_column('users', 'updated_at', # THIS COLUMN ALREADY DOES NOT EXIST OR IS ALREADY ALTERED
+    #            existing_type=mysql.DATETIME(),
+    #            nullable=False)
     op.alter_column('users', 'affiliate_id',
                existing_type=mysql.VARCHAR(length=36),
                type_=sa.String(length=50),
@@ -119,8 +119,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['user_type_option_id'], ['user_type_options.id'], ),
     sa.PrimaryKeyConstraint('user_id', 'user_type_option_id'),
-    mysql_charset='utf8mb4', # Added this line
-    mysql_collate='utf8mb4_0900_ai_ci' # Added this line
+    # mysql_charset='utf8mb4', # Removed this line
+    # mysql_collate='utf8mb4_0900_ai_ci' # Removed this line
     )
 
     # Step 7: Re-enable foreign key checks
