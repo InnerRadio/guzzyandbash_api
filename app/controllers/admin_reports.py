@@ -1,119 +1,208 @@
-# /var/www/tarot-api/guzzy_and_bash_productions/app/controllers/admin_reports.py
+# app/controllers/admin_reports.py
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query # Added Query for pagination/filtering
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import Dict, Any, List, Optional # Added Optional
-from datetime import datetime, date # Added date for date filtering
 
-from app.database import get_db
+from app.dependencies import get_db, get_current_active_admin_user, get_current_active_superuser
 from app.services import reports as reports_service
-from app.models.user import User # Import User model for potential type hints in responses
+from app.models.user import User, UserRole # Import User and UserRole for type hinting and filtering
+from app.models.content import ContentType, ContentStatus # Import for type hinting in queries
 
-# Placeholder for a simple admin dependency for now.
-def get_current_admin_user():
-    # In a real application, this would verify the user's admin role from their token.
-    # For testing, we'll temporarily allow access.
-    return True # Temporarily allow access for testing purposes
-
-router = APIRouter(tags=["Admin Reports"])
-
-# Existing Endpoints:
-@router.get(
-    "/admin/reports/users-summary",
-    response_model=Dict[str, Any], # Adjust response model as needed
-    summary="Admin: Get Users Summary Report",
-    description="Provides a basic summary of user statistics for administrative oversight."
+# MODIFIED: Added prefix and tags for standardization
+router = APIRouter(
+    prefix="/admin_reports",
+    tags=["Admin Reports"]
 )
-def get_users_summary(
-    db: Session = Depends(get_db),
-    current_admin_user: bool = Depends(get_current_admin_user)
-):
-    if not current_admin_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access admin reports"
-        )
-    return reports_service.get_users_summary_report(db)
+
+# --- Admin Reports ---
 
 @router.get(
-    "/admin/reports/content-summary",
-    response_model=Dict[str, Any], # Adjust response model as needed
-    summary="Admin: Get Content Summary Report",
-    description="Provides a basic summary of content statistics for administrative oversight."
+    "/users-summary", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any], # Response model for the report
+    summary="Get User Summary Report (Admin Only)",
+    description="Provides a summary of user statistics, including total users, users by role, and new users in the last 30 days. Requires Admin or Super User role."
 )
-def get_content_summary(
+async def get_users_summary(
     db: Session = Depends(get_db),
-    current_admin_user: bool = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_active_admin_user) # Ensures admin or superuser access
 ):
-    if not current_admin_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access admin reports"
-        )
-    return reports_service.get_content_summary_report(db)
+    """
+    Retrieves a summary of user statistics from the database.
+    """
+    report_data = await reports_service.get_users_summary_report(db)
+    return report_data
 
-# NEW ENDPOINT: Admin Get Users List Report
 @router.get(
-    "/admin/reports/users",
-    response_model=List[Dict[str, Any]], # Adjust response model as needed for user data
-    summary="Admin: Get Detailed Users Report",
-    description="Retrieves a detailed list of users, with optional filtering and pagination. This report is for administrative use only."
+    "/content-summary", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get Content Summary Report (Admin Only)",
+    description="Provides a summary of content statistics, including total content items and content by type/status. Requires Admin or Super User role."
 )
-def get_admin_users_report(
+async def get_content_summary(
     db: Session = Depends(get_db),
-    current_admin_user: bool = Depends(get_current_admin_user),
-    skip: int = Query(0, ge=0, description="Number of items to skip (for pagination)"),
-    limit: int = Query(100, ge=1, le=500, description="Maximum number of items to return"),
-    user_role: Optional[str] = Query(None, description="Filter by user role (e.g., 'ADMIN', 'CONSUMER', 'ARTIST')"),
-    is_active: Optional[bool] = Query(None, description="Filter by user active status"),
-    start_date: Optional[date] = Query(None, description="Filter users registered on or after this date (YYYY-MM-DD)"),
-    end_date: Optional[date] = Query(None, description="Filter users registered on or before this date (YYYY-MM-DD)")
+    current_user: User = Depends(get_current_active_admin_user)
 ):
-    if not current_admin_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access admin reports"
-        )
-    return reports_service.get_admin_users_report(
-        db=db,
-        skip=skip,
-        limit=limit,
-        user_role=user_role,
-        is_active=is_active,
-        start_date=start_date,
-        end_date=end_date
-    )
+    """
+    Retrieves a summary of content statistics (currently dummy data).
+    """
+    report_data = await reports_service.get_content_summary_report_dummy(db)
+    return report_data
 
-# NEW ENDPOINT: Admin Get Content List Report
+
 @router.get(
-    "/admin/reports/content",
-    response_model=List[Dict[str, Any]], # Adjust response model as needed for content data
-    summary="Admin: Get Detailed Content Report",
-    description="Retrieves a detailed list of content items, with optional filtering and pagination. This report is for administrative use only."
+    "/users", # MODIFIED: Path is now relative to prefix
+    response_model=List[Dict[str, Any]],
+    summary="Get Detailed Users Report (Admin Only)",
+    description="Provides a detailed list of users with filtering and pagination. Requires Admin or Super User role."
 )
-def get_admin_content_report(
+async def get_detailed_users_report(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    role: Optional[UserRole] = Query(None, description="Filter users by role"),
+    is_active: Optional[bool] = Query(None, description="Filter users by active status"),
     db: Session = Depends(get_db),
-    current_admin_user: bool = Depends(get_current_admin_user),
-    skip: int = Query(0, ge=0, description="Number of items to skip (for pagination)"),
-    limit: int = Query(100, ge=1, le=500, description="Maximum number of items to return"),
-    content_type: Optional[str] = Query(None, description="Filter by content type (e.g., 'Art', 'Music')"),
-    content_status: Optional[str] = Query(None, description="Filter by content status (e.g., 'published', 'pending', 'rejected')"),
-    creator_id: Optional[int] = Query(None, description="Filter by content creator's user ID"),
-    min_views: Optional[int] = Query(None, ge=0, description="Filter by minimum number of views"),
-    min_sales: Optional[float] = Query(None, ge=0, description="Filter by minimum sales amount")
+    current_user: User = Depends(get_current_active_admin_user)
 ):
-    if not current_admin_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access admin reports"
-        )
-    return reports_service.get_admin_content_report(
-        db=db,
-        skip=skip,
-        limit=limit,
-        content_type=content_type,
-        content_status=content_status,
-        creator_id=creator_id,
-        min_views=min_views,
-        min_sales=min_sales
-    )
+    """
+    Retrieves a detailed list of users (currently dummy data).
+    """
+    report_data = await reports_service.get_users_report_dummy(db, skip=skip, limit=limit, role=role, is_active=is_active)
+    return report_data
+
+@router.get(
+    "/content", # MODIFIED: Path is now relative to prefix
+    response_model=List[Dict[str, Any]],
+    summary="Get Detailed Content Report (Admin Only)",
+    description="Provides a detailed list of content items with filtering and pagination. Requires Admin or Super User role."
+)
+async def get_detailed_content_report(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    content_type: Optional[ContentType] = Query(None, description="Filter content by type"), # Use Enum for type hinting
+    status: Optional[ContentStatus] = Query(None, description="Filter content by status"), # Use Enum for type hinting
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin_user)
+):
+    """
+    Retrieves a detailed list of content items (currently dummy data).
+    """
+    report_data = await reports_service.get_content_report_dummy(db, skip=skip, limit=limit, content_type=content_type, status=status)
+    return report_data
+
+
+# --- Superuser Reports (requiring Super_User role) ---
+
+@router.get(
+    "/superuser/reports/token-usage", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get Token Usage Report (Super User Only)",
+    description="Provides statistics on API token usage. Requires Super User role."
+)
+async def get_token_usage_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves a token usage report (currently dummy data).
+    """
+    report_data = await reports_service.get_token_usage_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/nft-mint-activity", # MODIFIED: Path is now relative to prefix
+    response_model=List[Dict[str, Any]],
+    summary="Get NFT Mint Activity Report (Super User Only)",
+    description="Provides a detailed report on NFT minting activity. Requires Super User role."
+)
+async def get_nft_mint_activity_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves an NFT minting activity report (currently dummy data).
+    """
+    report_data = await reports_service.get_nft_mint_activity_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/financial", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get Financial Report (Super User Only)",
+    description="Provides an overview of financial statistics. Requires Super User role."
+)
+async def get_financial_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves a financial report (currently dummy data).
+    """
+    report_data = await reports_service.get_financial_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/ipfs-costs", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get IPFS Costs Report (Super User Only)",
+    description="Provides a report on IPFS storage and retrieval costs. Requires Super User role."
+)
+async def get_ipfs_costs_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves an IPFS costs report (currently dummy data).
+    """
+    report_data = await reports_service.get_ipfs_costs_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/engagement", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get Engagement Report (Super User Only)",
+    description="Provides user engagement statistics. Requires Super User role."
+)
+async def get_engagement_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves an engagement report (currently dummy data).
+    """
+    report_data = await reports_service.get_engagement_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/users-by-referral", # MODIFIED: Path is now relative to prefix
+    response_model=List[Dict[str, Any]],
+    summary="Get Users by Referral Report (Super User Only)",
+    description="Provides a report on users acquired through referral programs. Requires Super User role."
+)
+async def get_users_by_referral_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves a report on users by referral (currently dummy data).
+    """
+    report_data = await reports_service.get_users_by_referral_report_dummy(db)
+    return report_data
+
+@router.get(
+    "/superuser/reports/affiliate-commissions", # MODIFIED: Path is now relative to prefix
+    response_model=Dict[str, Any],
+    summary="Get Affiliate Commissions Report (Super User Only)",
+    description="Provides a report on affiliate commissions. Requires Super User role."
+)
+async def get_affiliate_commissions_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_superuser)
+):
+    """
+    Retrieves an affiliate commissions report (currently dummy data).
+    """
+    report_data = await reports_service.get_affiliate_commissions_report_dummy(db)
+    return report_data
+
+# REMOVED DUPLICATE PUBLIC REPORTS: These are now handled by app/controllers/public_reports.py

@@ -5,7 +5,6 @@ import asyncio
 
 try:
     import bcrypt
-    # These debug prints are still active from previous debugging, will keep for now
     print(f"DEBUG: sys.path at startup: {sys.path}", file=sys.stderr)
     print(f"DEBUG: Loaded bcrypt module path: {bcrypt.__file__}", file=sys.stderr)
     print(f"DEBUG: Loaded bcrypt version: {bcrypt.__version__}", file=sys.stderr)
@@ -32,6 +31,8 @@ from app.controllers import user_types
 from app.controllers import admin_reports
 from app.controllers import public_reports
 from app.controllers import nft_operations
+from app.controllers import user_reports
+from app.controllers import affiliate_reports # NEW: Import affiliate_reports controller
 
 from fastapi.routing import APIRoute
 
@@ -39,7 +40,7 @@ from fastapi.routing import APIRoute
 # This creates an instance of HTTPBearer which FastAPI uses to generate the OpenAPI spec
 # We will use this in the API definition to explicitly tell Swagger about our bearer token.
 bearer_scheme = HTTPBearer(
-    description="Enter your JWT token in the format: **Bearer &lt;token>**",
+    description="Enter your JWT token in the format: **Bearer <token>**",
     scheme_name="BearerAuth" # Assign a name that can be referenced in security
 )
 
@@ -98,6 +99,8 @@ app.include_router(user_types.router, prefix="/api/v1")
 app.include_router(admin_reports.router, prefix="/api/v1", tags=["Admin Reports"])
 app.include_router(public_reports.router, prefix="/api/v1", tags=["Public Reports"])
 app.include_router(nft_operations.router, prefix="/api/v1", tags=["NFT Operations"])
+app.include_router(user_reports.router, prefix="/api/v1", tags=["User Reports"])
+app.include_router(affiliate_reports.router, prefix="/api/v1", tags=["Affiliate Reports"]) # NEW: Include affiliate_reports router
 
 @app.get("/", tags=["Core"])
 async def root():
@@ -113,7 +116,7 @@ async def on_startup():
     print("DEBUG: Registered FastAPI routes:", file=sys.stderr)
     for route in app.routes:
         if isinstance(route, APIRoute):
-            print(f"DEBUG:   Path: {route.path}, Name: {route.name}, Methods: {route.methods}", file=sys.stderr)
+            print(f"DEBUG:    Path: {route.path}, Name: {route.name}, Methods: {route.methods}", file=sys.stderr)
 
     if asyncio.iscoroutinefunction(init_db):
         await init_db()

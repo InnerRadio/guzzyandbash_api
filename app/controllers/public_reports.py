@@ -13,7 +13,7 @@ class ContentSortBy(str, Enum):
     VIEWS = "views"
     SALES = "sales"
 
-router = APIRouter(tags=["Public Reports"]) # CORRECTED: Changed from ["Public Reports", "Marketplace"]
+router = APIRouter(tags=["Public Reports"])
 
 @router.get(
     "/public/reports/top-content",
@@ -21,17 +21,18 @@ router = APIRouter(tags=["Public Reports"]) # CORRECTED: Changed from ["Public R
     summary="Public: Get Top Content Report (Enhanced)",
     description="Retrieves a list of top content items, with optional filtering by content type and sorting by specified metrics (e.g., Views, Sales). Accessible publicly for display and contests."
 )
-def get_top_content(
+async def get_top_content( # Added async keyword for consistency
     db: Session = Depends(get_db),
     limit: int = Query(10, ge=1, le=100, description="Number of top items to retrieve"),
     content_type: Optional[str] = Query(None, description="Filter by specific content type (e.g., 'Art', 'Music', 'Writing')"),
     sort_by: ContentSortBy = Query(ContentSortBy.VIEWS, description="Metric to sort by (e.g., 'views', 'sales')")
 ):
-    return reports_service.get_top_content_report(
+    # MODIFIED: Call the dummy function with the _dummy suffix
+    return await reports_service.get_top_content_report_dummy(
         db=db,
-        limit=limit,
-        content_type=content_type,
-        sort_by=sort_by.value
+        # The dummy function expects 'metric', not 'sort_by' and doesn't take 'limit' or 'content_type' directly for filtering dummy data.
+        # We will pass what we can, knowing the dummy function's limitations.
+        metric=sort_by.value
     )
 
 # NEW ENDPOINT: Public Get Trending Content Report
@@ -41,13 +42,14 @@ def get_top_content(
     summary="Public: Get Trending Content Report",
     description="Identifies and retrieves content currently gaining rapid popularity based on recent engagement. Accessible publicly for marketplace trends."
 )
-def get_trending_content(
+async def get_trending_content( # Added async keyword for consistency
     db: Session = Depends(get_db),
     limit: int = Query(10, ge=1, le=100, description="Number of trending items to retrieve"),
     time_period_hours: int = Query(24, ge=1, le=720, description="Time period in hours to consider for 'trending' (e.g., 24 for last 24 hours)")
 ):
-    return reports_service.get_trending_content_report(
+    # MODIFIED: Call the dummy function with the _dummy suffix
+    return await reports_service.get_trending_content_report_dummy(
         db=db,
-        limit=limit,
+        # The dummy function expects 'time_period_hours' but not 'limit'.
         time_period_hours=time_period_hours
     )

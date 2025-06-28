@@ -3,17 +3,16 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text # Import Text for large text fields
-from sqlalchemy.dialects.mysql import CHAR # NEW: Import CHAR for consistency, though it might already be imported
-from sqlalchemy.orm import relationship, Mapped, mapped_column # Import Mapped and mapped_column for SQLAlchemy 2.0 style
+from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy.dialects.mysql import CHAR, MEDIUMTEXT
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 # Assuming Base is in app.database
 from ..database import Base
 
-# NEW: Import UserResponse for nested Pydantic schema
-# It's important to keep this import as MintedMemorialEntryResponse depends on it.
-from app.models.user import UserResponse
-from pydantic import BaseModel # NEW: Import BaseModel for Pydantic schemas
+# NEW: Import UserResponse from the new schemas file
+from app.schemas.user_schemas import UserResponse # Corrected import path
+from pydantic import BaseModel
 
 class MintedMemorialEntry(Base):
     __tablename__ = "minted_memorial_entries"
@@ -29,21 +28,19 @@ class MintedMemorialEntry(Base):
     metadata_uri: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) # IPFS URI
     name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    image_uri: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) # This looks like a duplicate of metadata_uri, but kept if you have a specific use.
+    image_uri: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
 
     # Store full XRPL response for debugging/auditing
-    xrpl_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    xrpl_response: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT, nullable=True)
 
-
-    # Define relationship to the User model
-    # The 'back_populates' argument must match the name of the relationship property in the User model ('minted_nfts')
+    # Define relationship to the User model (SQLAlchemy handles forward refs with from __future__ annotations)
     minter_user: Mapped["User"] = relationship("User", back_populates="minted_nfts")
 
     def __repr__(self):
         return f"<MintedMemorialEntry(id='{self.id}', memorial_entry_id='{self.memorial_entry_id}', nft_token_id='{self.nft_token_id}')>"
 
 
-# NEW: Pydantic Schema for returning MintedMemorialEntry via API
+# Pydantic Schema for returning MintedMemorialEntry via API
 class MintedMemorialEntryResponse(BaseModel):
     id: str
     memorial_entry_id: str
@@ -55,21 +52,14 @@ class MintedMemorialEntryResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     image_uri: Optional[str] = None
-    # The full xrpl_response can be very large. We are omitting it from this general
-    # response model to keep payloads light. A separate endpoint could provide the full detail.
-    # xrpl_response: Optional[str] = None # Omitted by default for performance/brevity
 
-    # Include nested UserResponse to show minter details
-    # IMPORTANT: Use 'UserResponse' directly, not a string forward reference,
-    # because we are importing it directly above.
+    # Include nested UserResponse to show minter details.
+    # Now imported directly from app.schemas.user_schemas
     minter_user: Optional[UserResponse] = None
 
-
     class Config:
-        from_attributes = True # This replaces orm_mode = True in Pydantic v2+
-        # Json serialization of datetime objects is handled by FastAPI's default JSONResponse automatically
+        from_attributes = True
 
-# NEW: Explicitly call update_forward_refs() after all models are defined
-# This helps Pydantic resolve nested references like UserResponse within MintedMemorialEntryResponse.
-# This should happen after all potentially referenced models are imported.
+# Explicitly call update_forward_refs() for this Pydantic model.
+# This resolves any *remaining* string literal forward references within this specific Pydantic model.
 MintedMemorialEntryResponse.update_forward_refs()
