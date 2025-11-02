@@ -1,65 +1,48 @@
+from __future__ import annotations # Add this line to avoid circular imports
 # app/models/nft.py
 
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, ForeignKey
-from sqlalchemy.dialects.mysql import CHAR, MEDIUMTEXT
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, ForeignKey, DECIMAL
+from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.dialects.mysql import CHAR
 
-# Assuming Base is in app.database
-from ..database import Base
+from app.database import Base
+# REMOVED: direct import of Content and User to resolve circular imports
 
-# NEW: Import UserResponse from the new schemas file
-from app.schemas.user_schemas import UserResponse # Corrected import path
-from pydantic import BaseModel
-
-class MintedMemorialEntry(Base):
-    __tablename__ = "minted_memorial_entries"
+class NFT(Base):
+    __tablename__ = "nfts"
 
     id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    memorial_entry_id: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    nft_token_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False) # XRPL NFT ID is 64 hex chars
-    transaction_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False) # XRPL transaction hash
-    minter_user_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("users.id"), nullable=False)
-    minted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    token_id: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
+    # New UUID field for external references
+    uuid: Mapped[str] = mapped_column(CHAR(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    image_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    # NEW: Add metadata_url field
+    metadata_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Foreign key to the User who owns/minted the NFT
+    owner_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("users.id"), nullable=False, index=True)
+    # Foreign key to the content item this NFT represents
+    content_id: Mapped[str] = mapped_column(CHAR(36), ForeignKey("content_items.id"), nullable=False, index=True)
 
-    # Optional: Store some metadata for easier lookup without querying XRPL or IPFS
-    metadata_uri: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) # IPFS URI
-    name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    description: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    image_uri: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Timestamps
+    minted_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
-    # Store full XRPL response for debugging/auditing
-    xrpl_response: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT, nullable=True)
-
-    # Define relationship to the User model (SQLAlchemy handles forward refs with from __future__ annotations)
-    minter_user: Mapped["User"] = relationship("User", back_populates="minted_nfts")
-
-    def __repr__(self):
-        return f"<MintedMemorialEntry(id='{self.id}', memorial_entry_id='{self.memorial_entry_id}', nft_token_id='{self.nft_token_id}')>"
-
-
-# Pydantic Schema for returning MintedMemorialEntry via API
-class MintedMemorialEntryResponse(BaseModel):
-    id: str
-    memorial_entry_id: str
-    nft_token_id: str
-    transaction_hash: str
-    minter_user_id: str
-    minted_at: datetime
-    metadata_uri: Optional[str] = None
-    name: Optional[str] = None
-    description: Optional[str] = None
-    image_uri: Optional[str] = None
-
-    # Include nested UserResponse to show minter details.
-    # Now imported directly from app.schemas.user_schemas
-    minter_user: Optional[UserResponse] = None
-
-    class Config:
-        from_attributes = True
-
-# Explicitly call update_forward_refs() for this Pydantic model.
-# This resolves any *remaining* string literal forward references within this specific Pydantic model.
-MintedMemorialEntryResponse.update_forward_refs()
+    # Relationships
+    owner: Mapped["User"] = relationship(
+        "User",
+        back_populates="nfts",
+        lazy="joined"
+    )
+    # NEW: Relationship to the Content item that this NFT represents
+    # This completes the reciprocal relationship with 'nfts_minted' in the Content model
+    content_item: Mapped["Content"] = relationship(
+        "Content",
+        back_populates="nfts_minted",
+        lazy="joined" # Or "selectin" for N+1 query optimization
+    )

@@ -1,126 +1,155 @@
 # app/controllers/user_reports.py
 
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import Dict, Any, List, Optional
-from datetime import datetime, date # Ensure both datetime and date are available
-
-from app.database import get_db
+from app.dependencies import get_db, get_current_user_id
 from app.services import reports as reports_service
-from app.models.user import User, UserRole
-from app.dependencies import get_current_active_user # MODIFIED: Use get_current_active_user
-
-# Define the APIRouter for user-specific reports
-# MODIFIED: Added prefix to the router itself for cleaner URLs
-router = APIRouter(prefix="/user_reports", tags=["User Reports"])
-
-# --- User-Specific Reports (Requiring Authentication for the Current User) ---
-
-@router.get(
-    "/my-profile-summary",
-    response_model=Dict[str, Any],
-    summary="Get My Profile Summary (Authenticated User)",
-    description="Provides a summary of the authenticated user's profile data, including content statistics, NFT count, and basic account info. Requires active user authentication.",
-    tags=["User Reports"]
+from app.schemas.user_reports import (
+    UserProfileSummary, UserContentItem, UserNFTItem,
+    UserActivityLogEntry, UserEarningsReport, UserFullProfile
 )
+from app.models.content import ContentType, ContentStatus
+from datetime import date, datetime
+
+router = APIRouter()
+
+@router.get("/my-profile-summary", response_model=UserProfileSummary, summary="Get summary of current user's profile")
 async def get_my_profile_summary(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user) # MODIFIED: Use get_current_active_user
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
 ):
     """
-    Retrieves a summary report for the currently authenticated user's profile.
+    Retrieves a summary of the current authenticated user's profile from the database.
+    This includes basic statistics about their content, NFTs, views, and earnings.
     """
-    # Calls the reports service function (will return dummy data initially)
-    report_data = await reports_service.get_user_profile_summary_dummy(db, user_id=current_user.id) # MODIFIED: Pass current_user.id
+    report_data = await reports_service.get_user_profile_summary(db, user_id)
+    if not report_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User profile summary not found."
+        )
     return report_data
 
-@router.get(
-    "/my-nft-collection",
-    response_model=List[Dict[str, Any]],
-    summary="Get My NFT Collection (Authenticated User)",
-    description="Provides a list of NFTs owned by the authenticated user. Requires active user authentication.",
-    tags=["User Reports"]
-)
+@router.get("/my-nft-collection", response_model=List[UserNFTItem], summary="Get NFT collection for current user")
 async def get_my_nft_collection(
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user), # MODIFIED: Use get_current_active_user
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    skip: int = Query(0, ge=0, description="Number of items to skip"),
+    limit: int = Query(10, ge=1, le=100, description="Number of NFTs to return")
 ):
     """
-    Retrieves a detailed list of NFTs owned by the currently authenticated user.
+    Retrieves the NFT collection for the current authenticated user from the database.
     """
-    # Calls the reports service function (will return dummy data initially)
-    report_data = await reports_service.get_user_nft_collection_dummy(db, user_id=current_user.id, skip=skip, limit=limit) # MODIFIED: Pass current_user.id
-    return report_data
+    nfts = await reports_service.get_user_nft_collection(db, user_id, skip=skip, limit=limit)
+    if not nfts:
+        # It's generally better to return an empty list for collections rather than 404
+        return []
+    return nfts
 
-@router.get(
-    "/my-content",
-    response_model=List[Dict[str, Any]], # Assuming a list of content items
-    summary="User: Get My Content Report",
-    description="Retrieves a list of content items created by the authenticated user, with optional filtering and pagination."
-)
-async def get_my_content_report( # Renamed from get_my_content_report to match original, but will use consistent service call
+@router.get("/my-content", response_model=List[UserContentItem], summary="Get content items for current user")
+async def get_my_content(
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user), # MODIFIED: Use get_current_active_user
-    skip: int = Query(0, ge=0, description="Number of items to skip (for pagination)"),
-    limit: int = Query(100, ge=1, le=500, description="Maximum number of items to return"),
-    content_type: Optional[str] = Query(None, description="Filter by content type (e.g., 'Art', 'Music')"),
-    content_status: Optional[str] = Query(None, description="Filter by content status (e.g., 'published', 'pending', 'rejected')")
+    content_type: Optional[ContentType] = Query(None, description="Filter by content type"),
+    status: Optional[ContentStatus] = Query(None, description="Filter by content status"),
+    skip: int = Query(0, ge=0, description="Number of items to skip"),
+    limit: int = Query(10, ge=1, le=100, description="Number of content items to return")
 ):
-    # Calls the reports service function (will return dummy data initially)
-    report_data = await reports_service.get_user_content_dummy( # MODIFIED: Use new dummy function name
-        db=db,
-        user_id=current_user.id, # MODIFIED: Pass current_user.id
-        skip=skip,
-        limit=limit,
+    """
+    Retrieves a list of content items (blogs, projects, etc.) created by the current authenticated user from the database.
+    Supports filtering by content type and status, and pagination.
+    """
+    content_items = await reports_service.get_user_content(
+        db,
+        user_id,
         content_type=content_type,
-        content_status=content_status
+        status=status,
+        skip=skip,
+        limit=limit
     )
-    return report_data
+    if not content_items:
+        return []
+    return content_items
 
-@router.get(
-    "/my-activity-log",
-    response_model=List[Dict[str, Any]],
-    summary="Get My Activity Log (Authenticated User)",
-    description="Provides a log of recent activities for the authenticated user (e.g., logins, purchases, content interactions). Requires active user authentication.",
-    tags=["User Reports"]
-)
+@router.get("/my-activity-log", response_model=List[UserActivityLogEntry], summary="Get activity log for current user")
 async def get_my_activity_log(
+    user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user), # MODIFIED: Use get_current_active_user
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    activity_type: Optional[str] = Query(None, description="Filter activity by type (e.g., 'login', 'purchase', 'view')"),
-    start_date: Optional[datetime] = Query(None, description="Filter activity from this date (YYYY-MM-DD)"),
-    end_date: Optional[datetime] = Query(None, description="Filter activity up to this date (YYYY-MM-DD)"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    start_date: Optional[date] = Query(None, description="Start date for activity log filter (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for activity log filter (YYYY-MM-DD)"),
+    skip: int = Query(0, ge=0, description="Number of items to skip"),
+    limit: int = Query(10, ge=1, le=100, description="Number of activity log entries to return")
 ):
     """
-    Retrieves a detailed log of recent activities for the currently authenticated user.
+    Retrieves the recent activity log for the current authenticated user from the database.
+    Supports filtering by event type and date range, and pagination.
     """
-    # Calls the reports service function (will return dummy data initially)
-    report_data = await reports_service.get_user_activity_log_dummy(db, user_id=current_user.id, skip=skip, limit=limit, activity_type=activity_type, start_date=start_date, end_date=end_date) # MODIFIED: Pass current_user.id
-    return report_data
+    activity_log = await reports_service.get_user_activity_log(
+        db,
+        user_id,
+        event_type=event_type,
+        start_date=start_date,
+        end_date=end_date,
+        skip=skip,
+        limit=limit
+    )
+    if not activity_log:
+        return []
+    return activity_log
 
-@router.get(
-    "/my-earnings",
-    response_model=Dict[str, Any], # Assuming a summary of earnings
-    summary="User: Get My Earnings Report",
-    description="Provides a summary of earnings for the authenticated user, primarily for content creators/artists."
-)
-async def get_my_earnings_report( # Renamed from get_my_earnings_report to match original, but will use consistent service call
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user), # MODIFIED: Use get_current_active_user
-    start_date: Optional[date] = Query(None, description="Start date for earnings calculation (YYYY-MM-DD)"),
-    end_date: Optional[date] = Query(None, description="End date for earnings calculation (YYYY-MM-DD)"),
-    currency: Optional[str] = Query("USD", description="Currency to report earnings in (e.g., 'XRP', 'USD')")
+@router.get("/my-earnings", response_model=UserEarningsReport, summary="Get earnings report for current user")
+async def get_my_earnings(
+    user_id: str = Depends(get_current_user_id),
+    start_date: Optional[date] = Query(None, description="Start date for earnings report (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="End date for earnings report (YYYY-MM-DD)"),
+    currency: str = Query("USD", description="Currency for earnings report"),
+    db: Session = Depends(get_db)
 ):
-    # Calls the reports service function (will return dummy data initially)
-    report_data = await reports_service.get_user_earnings_dummy( # MODIFIED: Use new dummy function name
-        db=db,
-        user_id=current_user.id, # MODIFIED: Pass current_user.id
+    """
+    Retrieves a summary of earnings for the current authenticated user.
+    Supports filtering by date range and currency.
+    NOTE: This currently returns placeholder data as dedicated database models for earnings are not yet implemented.
+    """
+    earnings_report = await reports_service.get_user_earnings(
+        db,
+        user_id,
         start_date=start_date,
         end_date=end_date,
         currency=currency
     )
-    return report_data
+    return earnings_report
+
+@router.get("/my-full-profile", response_model=UserFullProfile, summary="Get complete profile details for current user")
+async def get_my_full_profile(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieves a comprehensive view of the current authenticated user's profile,
+    including summary statistics, content, NFTs, and recent activity.
+    """
+    full_profile_data = await reports_service.get_my_full_profile(db, user_id)
+    
+    # Construct the full profile response using the data from the service function
+    full_profile = UserFullProfile(
+        profile_summary=full_profile_data.get("profile_summary"),
+        nft_collection=full_profile_data.get("nft_collection"),
+        content_items=full_profile_data.get("content_items"),
+        activity_log=full_profile_data.get("activity_log"),
+        earnings_report=full_profile_data.get("earnings_report"),
+        # These fields need to be populated from the actual user object obtained from the database
+        email=full_profile_data.get("profile_summary", {}).get("email"),
+        username=full_profile_data.get("profile_summary", {}).get("username"),
+        role=full_profile_data.get("profile_summary", {}).get("role"),
+        is_active=full_profile_data.get("profile_summary", {}).get("is_active"),
+        is_verified=full_profile_data.get("profile_summary", {}).get("is_verified"),
+        profile_picture_url=full_profile_data.get("profile_summary", {}).get("profile_picture_url"),
+        social_links=full_profile_data.get("profile_summary", {}).get("social_links"),
+        has_api_access=full_profile_data.get("profile_summary", {}).get("has_api_access"),
+        referral_code=full_profile_data.get("profile_summary", {}).get("referral_code"),
+        referred_by_user_id=full_profile_data.get("profile_summary", {}).get("referred_by_user_id"),
+        referred_by_referral_code=full_profile_data.get("profile_summary", {}).get("referred_by_referral_code")
+    )
+    return full_profile

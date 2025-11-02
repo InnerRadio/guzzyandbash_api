@@ -1,0 +1,8 @@
+{
+  "memorial_entry_id": "8b714597-e4f6-4659-94d3-c1b7b3b809ca",
+  "name": "Bash's First Memorial NFT",
+  "description": "A placeholder NFT for testing the minting endpoint.",
+  "image_uri": "https://example.com/placeholder_image.jpg",
+  "is_active": true,
+  "metadata_uri": "https://example.com/placeholder_metadata.json"
+}

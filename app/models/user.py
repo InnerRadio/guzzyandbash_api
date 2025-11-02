@@ -1,191 +1,203 @@
+from __future__ import annotations
+
 # app/models/user.py
+# This file defines the SQLAlchemy User model for the Guzzy and Bash Productions platform.
+# It includes user authentication details, profile information, role-based access control,
+# affiliate program fields, and various relationships to other models.
+# Pydantic schemas related to User are now defined exclusively in app/schemas/user_schemas.py
+# to maintain a clear separation of concerns (database models vs. API data contracts).
 
-from __future__ import annotations # NEW: Added to resolve circular import issues with type hints
+# Standard library imports
+import uuid  # Used for generating unique identifiers (UUIDs)
+from datetime import datetime  # Used for timestamp fields (created_at, last_updated_at)
+from typing import Optional, List, Dict, Any  # Added Dict, Any for social_links
+import enum # Required for defining Python Enums
+import json # Added for JSON serialization/deserialization for social_links
 
-import uuid
-import random
-import string
-from datetime import datetime
-from typing import Optional, List
+# SQLAlchemy imports for 2.0 style declarative models
+from sqlalchemy import (
+    Column,        # Used to define database columns
+    Integer,       # Integer column type, used for permissions_level
+    String,        # String (VARCHAR) column type, used for text fields
+    Boolean,       # Boolean column type, used for true/false flags
+    DateTime,      # DateTime column type, used for timestamps
+    ForeignKey,    # Used to define foreign key relationships to other tables
+    Table          # Used for defining association tables for many-to-many relationships
+)
+from sqlalchemy.types import Enum as SQLEnum # For mapping Python Enums to SQL ENUM type
+from sqlalchemy.sql import func # For database functions like CURRENT_TIMESTAMP
+from sqlalchemy.orm import relationship, Mapped, mapped_column # For ORM relationships and declarative mapping
+from sqlalchemy.dialects.mysql import CHAR # Specifically for UUID fields as CHAR(36)
 
-# SQLAlchemy imports for 2.0 style
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
-from sqlalchemy.types import Enum as SQLEnum # Use SQLEnum for SQLAlchemy Enum type
-from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy.dialects.mysql import CHAR # <-- NEW: Import CHAR for UUIDs
+from app.database import Base # Base class for SQLAlchemy models
+from app.core.security import get_password_hash # For hashing passwords
+from app.models.user_type_option import UserTypeOption # For UserTypeOption model
 
-from app.database import Base # Ensure this path is correct for your setup
+# --- Enums (User-related) ---
+# Defining an Enum for user roles. This helps in enforcing valid roles within the application.
+class UserRole(str, enum.Enum):
+    SUPERUSER = "superuser"
+    SUPER_USER = "SUPER_USER" # ADDED/CONFIRMED THIS FIX FOR DATABASE MISMATCH
+    ADMIN = "admin"
+    REGISTERED_USER = "registered_user"
+    CONSUMER = "CONSUMER"     # ADDED/CONFIRMED THIS FIX
+    CREATOR = "CREATOR"       # ADDED/CONFIRMED THIS FIX
+    GUEST_PLAYER = "GUEST_PLAYER" # ADDED/CONFIRMED THIS FIX
+    AFFILIATE = "affiliate"
+    GUEST = "guest"
 
-# NEW: Import necessary Pydantic schemas and UserRole from the new schemas file
-from app.schemas.user_schemas import UserResponse, UserInDB, UserRole
-from pydantic import BaseModel, EmailStr, Field # Re-import BaseModel, EmailStr, Field for other Pydantic schemas in this file
-
-
-# NEW: Import the AffiliateClick model (for Affiliate System) and Affiliate model
-from .affiliate import AffiliateClick, Affiliate
-# NEW: UNCOMMENTED MintedMemorialEntry import
-from .nft import MintedMemorialEntry
-
-
-# --- User Roles and Permissions Blueprint ---
-# Define permissions associated with each role. This is a blueprint for logic.
-ROLE_PERMISSIONS = {
-    UserRole.GUEST_PLAYER: [],
-    UserRole.REGISTERED_USER: ["read_self_profile"],
-    UserRole.CONSUMER: ["read_self_profile", "create_memorial_entry", "view_own_nfts"],
-    UserRole.AFFILIATE: ["read_self_profile", "view_affiliate_data", "create_referral_links"],
-    UserRole.CREATOR: ["read_self_profile", "manage_memorial_entries", "mint_nfts"],
-    UserRole.ADMIN: ["read_self_profile", "manage_users", "view_all_reports"],
-    UserRole.SUPER_USER: ["full_system_access"]
+# Blueprint for role-based permissions (mapping roles to specific actions/permissions)
+# This is a simplified example. In a real application, permissions might be more granular
+# and stored in a database or external configuration.
+ROLE_PERMISSIONS: Dict[UserRole, List[str]] = {
+    UserRole.SUPERUSER: ["create_user", "read_all_users", "update_user", "delete_user",
+                         "view_admin_reports", "manage_system_settings", "manage_user_types",
+                         "mint_nft", "view_financial_reports", "view_token_usage"],
+    UserRole.SUPER_USER: ["create_user", "read_all_users", "update_user", "delete_user", # ADDED/CONFIRMED THIS FIX
+                          "view_admin_reports", "manage_system_settings", "manage_user_types",
+                          "mint_nft", "view_financial_reports", "view_token_usage"],
+    UserRole.ADMIN: ["read_all_users", "update_user", "delete_user", "view_admin_reports"],
+    UserRole.REGISTERED_USER: ["read_self", "update_self_profile", "create_content", "view_own_content", "edit_own_content", "delete_own_content"],
+    UserRole.CONSUMER: ["read_self", "view_public_content"], # ADDED/CONFIRMED THIS FIX
+    UserRole.CREATOR: ["create_content", "view_own_content", "edit_own_content"], # ADDED/CONFIRMED THIS FIX
+    UserRole.GUEST_PLAYER: ["view_game_content"], # ADDED/CONFIRMED THIS FIX
+    UserRole.AFFILIATE: ["read_self", "update_self_profile", "view_affiliate_reports", "manage_referrals"],
+    UserRole.GUEST: ["view_public_content"] # Very limited access for unauthenticated users.
 }
 
-# Association table for User and UserTypeOption
-# MOVED: This definition is now BEFORE UserTypeOption class
-user_user_types = Table(
-    "user_user_types",
-    Base.metadata,
-    Column("user_id", CHAR(36), ForeignKey("users.id"), primary_key=True),
-    Column("user_type_option_id", CHAR(36), ForeignKey("user_type_options.id"), primary_key=True),
-)
+# Helper function for JSON column
+def json_serializable_column(column_type):
+    """Creates a custom type for JSON data that is stored as String."""
+    class JsonEncodedDict(String):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
 
-class UserTypeOption(Base):
-    __tablename__ = "user_type_options"
+        def process_bind_param(self, value, dialect):
+            if value is not None:
+                return json.dumps(value)
+            return value
 
-    id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
-    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+        def process_result_value(self, value, dialect):
+            if value is not None:
+                return json.loads(value)
+            return value
+    return JsonEncodedDict(column_type)
 
-    # Many-to-many relationship with User
-    users: Mapped[List["User"]] = relationship(
-        "User", secondary=user_user_types, back_populates="user_types"
-    )
-
-    def __repr__(self):
-        return f"<UserTypeOption(name='{self.name}', is_active={self.is_active})>"
-
+# --- SQLAlchemy Models ---
 
 class User(Base):
+    """
+    SQLAlchemy model for user accounts on the platform.
+    Represents the 'users' table in the database.
+    """
     __tablename__ = "users"
 
+    # Core User Identification and Authentication
     id: Mapped[str] = mapped_column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    username: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    uuid: Mapped[str] = mapped_column(CHAR(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4())) # New UUID for external reference
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
-    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
-    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False) # For account activation/deactivation
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False) # For email verification
+    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False) # For top-level admin
+
+    # NEW: Add has_api_access field
+    has_api_access: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Role-Based Access Control
+    role: Mapped[UserRole] = mapped_column(
+        SQLEnum(UserRole, name="user_role_enum", native_enum=False),
+        default=UserRole.REGISTERED_USER.value,
+        nullable=False
+    )
+    # Add permissions_level to match database schema, with a default value
+    permissions_level: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # Foreign key for user type (from user_type_options table)
+    user_type_id: Mapped[Optional[str]] = mapped_column(CHAR(36), ForeignKey("user_type_options.id"), nullable=True)
+
+
+    # Affiliate Program Fields
+    # Each user has a unique affiliate ID generated upon creation
+    affiliate_id: Mapped[str] = mapped_column(CHAR(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    # Referral code used by others to sign up under this user
+    referral_code: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True, index=True)
+    # The ID of the user who referred this user (self-referencing foreign key)
+    referred_by_id: Mapped[Optional[str]] = mapped_column(CHAR(36), ForeignKey("users.id"), nullable=True, index=True)
+
+
+    # Profile Information
+    first_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     bio: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     profile_picture_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    social_links: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True) # Stored as JSON string or similar
-    role: Mapped[UserRole] = mapped_column(SQLEnum(UserRole), default=UserRole.REGISTERED_USER, nullable=False)
-    permissions_level: Mapped[str] = mapped_column(String(50), default="standard", nullable=False) # e.g., "standard", "elevated"
-    affiliate_id: Mapped[Optional[str]] = mapped_column(CHAR(36), unique=True, index=True, nullable=True) # Unique ID for users who are affiliates
-    referring_affiliate_id: Mapped[Optional[str]] = mapped_column(CHAR(36), ForeignKey("users.affiliate_id"), nullable=True) # The affiliate_id of the user who referred this user
-    referral_code: Mapped[Optional[str]] = mapped_column(String(32), unique=True, index=True, nullable=True) # NEW: Short, human-readable referral code
+    # Social media links stored as JSON (e.g., {"twitter": "url", "linkedin": "url"})
+    social_links: Mapped[Optional[Dict[str, Any]]] = mapped_column(json_serializable_column(String(2048)), nullable=True)
+
+
+    # Timestamps for auditing
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
 
     # Relationships
-    user_types: Mapped[List["UserTypeOption"]] = relationship(
-        "UserTypeOption", secondary=user_user_types, back_populates="users"
-    )
-    # New: Relationship for NFTs minted by this user (now uses string literal for forward reference)
-    minted_nfts: Mapped[List["MintedMemorialEntry"]] = relationship(
-        "MintedMemorialEntry", back_populates="minter_user"
-    )
-    # New: Relationship for affiliate clicks generated by this user
-    affiliate_clicks: Mapped[List["AffiliateClick"]] = relationship(
-        "AffiliateClick",
-        back_populates="affiliate_user",
-        primaryjoin="User.id == AffiliateClick.affiliate_id" # Explicit join condition
-    )
-    # NEW: Relationship for Affiliate profile (one-to-one)
-    # This is the 'affiliate_profile' property that Affiliate model expects
-    affiliate_profile: Mapped[Optional["Affiliate"]] = relationship(
-        "Affiliate", back_populates="user", uselist=False, # uselist=False for one-to-one
-        primaryjoin="User.id == Affiliate.user_id" # Explicit primaryjoin
-    )
+    # One-to-one relationship with UserTypeOption
+    user_type_option: Mapped["UserTypeOption"] = relationship("UserTypeOption", lazy="joined", backref="users")
 
-    # Self-referencing relationship for referrals
+    # Self-referencing one-to-many relationship for referrals
     referred_users: Mapped[List["User"]] = relationship(
-        "User", backref="referrer", remote_side=[affiliate_id]
+        "User",
+        remote_side=[id], # 'id' is the column on the *remote* side (the user being referred)
+        back_populates="referred_by", # The 'referred_by' relationship on the referred user
+        lazy="joined" # Or "selectin" for N+1 query optimization
+    )
+    referred_by: Mapped[Optional["User"]] = relationship(
+        "User",
+        remote_side=[referred_by_id], # 'referred_by_id' is the column on *this* side (the referring user)
+        back_populates="referred_users", # The 'referred_users' relationship on the referring user
+
+        lazy="joined" # Or "selectin" for N+1 query optimization
     )
 
+    # One-to-many relationship with Content (Content owned by this user)
+    owned_content: Mapped[List["Content"]] = relationship(
+        "Content",
+        back_populates="owner",
+        lazy="joined", # Or "selectin" for N+1 query optimization
+        cascade="all, delete-orphan" # Content deleted if user is deleted
+    )
+
+    # One-to-many relationship with ActivityLog (Logs related to this user)
+    activity_logs: Mapped[List["ActivityLog"]] = relationship(
+        "ActivityLog",
+        back_populates="user",
+        lazy="joined", # Or "selectin" for N+1 query optimization
+        cascade="all, delete-orphan" # Activity logs deleted if user is deleted
+    )
+
+    # NEW: One-to-many relationship with NFT (NFTs minted by this user)
+    # This completes the reciprocal relationship with the 'owner' in NFT.
+    nfts: Mapped[List["NFT"]] = relationship( # RENAMED from minted_memorial_entries
+        "NFT", # UPDATED to refer to the NFT class directly
+        back_populates="owner", # This will now match the 'owner' relationship in NFT model
+        lazy="joined", # Or "selectin" for N+1 query optimization
+        cascade="all, delete-orphan" # Minted entries deleted if user is deleted
+    )
+
+    # Representation for debugging and utility methods
     def __repr__(self):
+        # String representation for debugging, showing key user details.
         return f"<User(username='{self.username}', email='{self.email}', role='{self.role.value}')>"
 
     def has_permission(self, permission: str) -> bool:
-        """Checks if the user's role has a specific permission."""
+        """
+        Checks if the user's assigned role has a specific permission.
+        This method queries the ROLE_PERMISSIONS blueprint.
+        """
         return permission in ROLE_PERMISSIONS.get(self.role, [])
 
-# Pydantic Schemas for API (Only UserCreate, UserUpdate, Token, TokenData remain here)
-class UserCreate(BaseModel):
-    username: str = Field(..., max_length=255)
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-    full_name: Optional[str] = None
-    bio: Optional[str] = None
-    profile_picture_url: Optional[str] = None
-    social_links: Optional[str] = None # Expecting a JSON string or similar
-    role: Optional[UserRole] = UserRole.REGISTERED_USER # Allow role to be set on creation, default to REGISTERED_USER
-    permissions_level: Optional[str] = "standard"
-    affiliate_id: Optional[str] = None # Allow providing if needed for specific cases, but will be auto-generated if None
-    referring_affiliate_id: Optional[str] = None
-    referral_code: Optional[str] = None # Allow providing referral_code (for future custom codes) or will be auto-generated
-    referring_referral_code: Optional[str] = None # NEW: Field to receive the human-readable referral code during registration
-
-    user_type_ids: Optional[List[str]] = [] # For assigning user types by ID
-
-    class Config:
-        from_attributes = True
-
-class UserUpdate(BaseModel):
-    username: Optional[str] = Field(None, max_length=255)
-    email: Optional[EmailStr] = None
-    password: Optional[str] = Field(None, min_length=8)
-    full_name: Optional[str] = None
-    bio: Optional[str] = None
-    profile_picture_url: Optional[str] = None
-    social_links: Optional[str] = None
-    is_active: Optional[bool] = None
-    role: Optional[UserRole] = None
-    permissions_level: Optional[str] = None
-    affiliate_id: Optional[str] = None
-    referring_affiliate_id: Optional[str] = None
-    referral_code: Optional[str] = None # NEW: Allow updating referral_code
-    referring_referral_code: Optional[str] = None # NEW: Allow updating referring_referral_code
-
-    user_type_ids: Optional[List[str]] = None # For updating user types by ID
-
-    class Config:
-        from_attributes = True
-
-# UserResponse and UserInDB are now imported from app.schemas.user_schemas
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-# Schema for creating a new UserTypeOption (Pydantic)
-# This schema is used by UserTypeOption model's `users` relationship `back_populates`
-# It's here because it's tightly coupled to the UserTypeOption model.
-# If UserResponse needs it, it should import from app.schemas.user_schemas
-class UserTypeOptionResponse(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
-    is_active: bool
-    created_at: datetime
-    last_updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-# IMPORTANT: Pydantic forward references. Call this after all Pydantic schemas are defined.
-UserTypeOptionResponse.update_forward_refs()
+# NOTE: All Pydantic schemas (e.g., UserCreate, UserResponse, Token, TokenData)
+# are now defined in app/schemas/user_schemas.py to keep models clean.
+# keeps database model definitions clean and distinct from API data contracts.

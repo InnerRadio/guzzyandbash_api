@@ -1,3 +1,4 @@
+from __future__ import annotations # Add this line to avoid circular imports
 # app/models/affiliate.py
 
 import uuid

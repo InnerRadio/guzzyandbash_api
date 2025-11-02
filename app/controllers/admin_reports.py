@@ -11,21 +11,21 @@ from app.models.content import ContentType, ContentStatus # Import for type hint
 
 # MODIFIED: Added prefix and tags for standardization
 router = APIRouter(
-    prefix="/admin_reports",
+    prefix="/admin_reports", # This prefix is already applied to all routes in this file
     tags=["Admin Reports"]
 )
 
 # --- Admin Reports ---
 
 @router.get(
-    "/users-summary", # MODIFIED: Path is now relative to prefix
-    response_model=Dict[str, Any], # Response model for the report
+    "/users-summary", # Corrected path: /api/v1/admin_reports/users-summary
+    response_model=Dict[str, Any],
     summary="Get User Summary Report (Admin Only)",
     description="Provides a summary of user statistics, including total users, users by role, and new users in the last 30 days. Requires Admin or Super User role."
 )
 async def get_users_summary(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_admin_user) # Ensures admin or superuser access
+    current_user: User = Depends(get_current_active_admin_user)
 ):
     """
     Retrieves a summary of user statistics from the database.
@@ -34,7 +34,7 @@ async def get_users_summary(
     return report_data
 
 @router.get(
-    "/content-summary", # MODIFIED: Path is now relative to prefix
+    "/content-summary", # Corrected path: /api/v1/admin_reports/content-summary
     response_model=Dict[str, Any],
     summary="Get Content Summary Report (Admin Only)",
     description="Provides a summary of content statistics, including total content items and content by type/status. Requires Admin or Super User role."
@@ -44,14 +44,15 @@ async def get_content_summary(
     current_user: User = Depends(get_current_active_admin_user)
 ):
     """
-    Retrieves a summary of content statistics (currently dummy data).
+    Retrieves a summary of content statistics.
     """
-    report_data = await reports_service.get_content_summary_report_dummy(db)
+    # CORRECTED CALL: Removed _dummy suffix
+    report_data = await reports_service.get_content_summary_report(db)
     return report_data
 
 
 @router.get(
-    "/users", # MODIFIED: Path is now relative to prefix
+    "/users", # Corrected path: /api/v1/admin_reports/users
     response_model=List[Dict[str, Any]],
     summary="Get Detailed Users Report (Admin Only)",
     description="Provides a detailed list of users with filtering and pagination. Requires Admin or Super User role."
@@ -65,13 +66,13 @@ async def get_detailed_users_report(
     current_user: User = Depends(get_current_active_admin_user)
 ):
     """
-    Retrieves a detailed list of users (currently dummy data).
+    Retrieves a detailed list of users from the database.
     """
-    report_data = await reports_service.get_users_report_dummy(db, skip=skip, limit=limit, role=role, is_active=is_active)
+    report_data = await reports_service.get_users_report(db, skip=skip, limit=limit, role=role, is_active=is_active)
     return report_data
 
 @router.get(
-    "/content", # MODIFIED: Path is now relative to prefix
+    "/content", # Corrected path: /api/v1/admin_reports/content
     response_model=List[Dict[str, Any]],
     summary="Get Detailed Content Report (Admin Only)",
     description="Provides a detailed list of content items with filtering and pagination. Requires Admin or Super User role."
@@ -79,22 +80,23 @@ async def get_detailed_users_report(
 async def get_detailed_content_report(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    content_type: Optional[ContentType] = Query(None, description="Filter content by type"), # Use Enum for type hinting
-    status: Optional[ContentStatus] = Query(None, description="Filter content by status"), # Use Enum for type hinting
+    content_type: Optional[ContentType] = Query(None, description="Filter content by type"),
+    status: Optional[ContentStatus] = Query(None, description="Filter content by status"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_admin_user)
 ):
     """
-    Retrieves a detailed list of content items (currently dummy data).
+    Retrieves a detailed list of content items from the database.
     """
-    report_data = await reports_service.get_content_report_dummy(db, skip=skip, limit=limit, content_type=content_type, status=status)
+    # CRITICAL FIX: Changed from get_content_report_dummy to get_content_report (already done, good!)
+    report_data = await reports_service.get_content_report(db, skip=skip, limit=limit, content_type=content_type, status=status)
     return report_data
 
 
 # --- Superuser Reports (requiring Super_User role) ---
 
 @router.get(
-    "/superuser/reports/token-usage", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/token-usage", # Corrected path: /api/v1/admin_reports/superuser/reports/token-usage
     response_model=Dict[str, Any],
     summary="Get Token Usage Report (Super User Only)",
     description="Provides statistics on API token usage. Requires Super User role."
@@ -110,7 +112,7 @@ async def get_token_usage_report(
     return report_data
 
 @router.get(
-    "/superuser/reports/nft-mint-activity", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/nft-mint-activity", # Corrected path: /api/v1/admin_reports/superuser/reports/nft-mint-activity
     response_model=List[Dict[str, Any]],
     summary="Get NFT Mint Activity Report (Super User Only)",
     description="Provides a detailed report on NFT minting activity. Requires Super User role."
@@ -122,11 +124,11 @@ async def get_nft_mint_activity_report(
     """
     Retrieves an NFT minting activity report (currently dummy data).
     """
-    report_data = await reports_service.get_nft_mint_activity_report_dummy(db)
+    report_data = await reports_service.get_nft_minting_report_dummy(db)
     return report_data
 
 @router.get(
-    "/superuser/reports/financial", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/financial", # Corrected path: /api/v1/admin_reports/superuser/reports/financial
     response_model=Dict[str, Any],
     summary="Get Financial Report (Super User Only)",
     description="Provides an overview of financial statistics. Requires Super User role."
@@ -138,11 +140,11 @@ async def get_financial_report(
     """
     Retrieves a financial report (currently dummy data).
     """
-    report_data = await reports_service.get_financial_report_dummy(db)
+    report_data = await reports_service.get_financial_overview_report_dummy(db)
     return report_data
 
 @router.get(
-    "/superuser/reports/ipfs-costs", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/ipfs-costs", # Corrected path: /api/v1/admin_reports/superuser/reports/ipfs-costs
     response_model=Dict[str, Any],
     summary="Get IPFS Costs Report (Super User Only)",
     description="Provides a report on IPFS storage and retrieval costs. Requires Super User role."
@@ -158,7 +160,7 @@ async def get_ipfs_costs_report(
     return report_data
 
 @router.get(
-    "/superuser/reports/engagement", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/engagement", # Corrected path: /api/v1/admin_reports/superuser/reports/engagement
     response_model=Dict[str, Any],
     summary="Get Engagement Report (Super User Only)",
     description="Provides user engagement statistics. Requires Super User role."
@@ -174,7 +176,7 @@ async def get_engagement_report(
     return report_data
 
 @router.get(
-    "/superuser/reports/users-by-referral", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/users-by-referral", # Corrected path: /api/v1/admin_reports/superuser/reports/users-by-referral
     response_model=List[Dict[str, Any]],
     summary="Get Users by Referral Report (Super User Only)",
     description="Provides a report on users acquired through referral programs. Requires Super User role."
@@ -190,7 +192,7 @@ async def get_users_by_referral_report(
     return report_data
 
 @router.get(
-    "/superuser/reports/affiliate-commissions", # MODIFIED: Path is now relative to prefix
+    "/superuser/reports/affiliate-commissions", # Corrected path: /api/v1/admin_reports/superuser/reports/affiliate-commissions
     response_model=Dict[str, Any],
     summary="Get Affiliate Commissions Report (Super User Only)",
     description="Provides a report on affiliate commissions. Requires Super User role."

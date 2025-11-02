@@ -8,4 +8,8 @@ typing_extensions>=4.0.0
 passlib[bcrypt]>=1.7.4 # For password hashing
 python-jose[cryptography]>=3.3.0 # For JWT authentication
 xrpl-py>=1.7.0 # For XRPL operations
-alembic>=1.10.0 # For database migrations - NEWLY ADDED
+alembic>=1.10.0 # For database migrations
+nest_asyncio # For async loop management (if needed, though uvloop is preferred)
+email-validator # Required for Pydantic's EmailStr validation
+pydantic-settings # For application settings management
+python-multipart # NEWLY ADDED: Required for FastAPI form data handling

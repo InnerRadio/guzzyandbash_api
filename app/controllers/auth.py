@@ -1,178 +1,241 @@
 # app/controllers/auth.py
+# This file handles authentication-related API endpoints, including user login,
+# token generation, password hashing, and user creation.
 
-import uuid # Existing: Import uuid for generating unique affiliate IDs
-import random # NEW: Import random for generating unique referral codes
-import string # NEW: Import string for character sets in referral code generation
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+# Standard library imports
+from datetime import timedelta, datetime
+from typing import Annotated, Optional, List, Any
+import uuid
+import random
+import string
+import enum
+import logging
+import sys
+
+# FastAPI and Pydantic imports
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+
+# Security utilities
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+
+# Database and model imports
 from sqlalchemy.orm import Session
-from typing import Optional, List # Ensure List is imported
+from app.database import get_db
+from app.models.user import User, UserRole
+from app.schemas.user_schemas import UserCreate, UserResponse, Token, ResetPasswordRequest, PasswordResetConfirm, LoginRequest
+import app.crud.user as crud
 
-# Imports from your database and models
-from ..database import get_db
-# NEW: Import UserTypeOption for handling user_type_ids
-from ..models.user import User, UserCreate as ModelUserCreate, UserResponse as ModelUserResponse, UserTypeOption
+# Import the settings object from app.core.config
+from app.core.config import settings
 
-# Imports from your dependencies for authentication logic
-from ..dependencies import get_password_hash, verify_password, create_access_token, get_current_user
-
-# Pydantic Models for API Requests/Responses related to Auth
-from pydantic import BaseModel, EmailStr, Field
-
-# Define the router for authentication endpoints with a TAG and the CORRECT PREFIX!
-router = APIRouter(
-    prefix="/auth", # <--- CRITICAL FIX: ADDED PREFIX HERE!
-    tags=["Authentication & Users"]
+# Import only functions from app.core.security
+from app.core.security import (
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    create_refresh_token,
 )
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
+# Configuration for logging
+logging.basicConfig(level=logging.DEBUG, stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-class TokenData(BaseModel):
-    username: Optional[str] = None
+# DEBUGGING LINE: This will print the path of this file when it's loaded
+print(f"DEBUG: app.controllers.auth is loaded from: {__file__}")
 
-class UserInDB(ModelUserResponse):
-    hashed_password: str
 
-# Helper function to generate unique referral codes
-def generate_unique_referral_code(db: Session, length: int = 8) -> str:
-    """Generates a unique, short alphanumeric referral code."""
-    characters = string.ascii_uppercase + string.digits # A-Z, 0-9
-    max_attempts = 10 # Prevent infinite loops in case of extreme collisions
-    for _ in range(max_attempts):
-        code = ''.join(random.choices(characters, k=length))
-        # Check if code already exists in the database
-        if not db.query(User).filter(User.referral_code == code).first():
-            return code
-    # If after max_attempts, a unique code isn't found, raise an error
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Failed to generate a unique referral code after multiple attempts. Please try again."
+# FastAPI router for authentication endpoints
+router = APIRouter(
+    tags=["Authentication"],
+    responses={404: {"description": "Not found"}},
+)
+
+# OAuth2PasswordBearer for handling token security
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register_user(
+    user_create: UserCreate,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    logger.debug(f"Received registration request for username: {user_create.username}, email: {user_create.email}")
+
+    # Check if user already exists by email or username
+    if crud.get_user_by_email(db, email=user_create.email):
+        logger.warning(f"Registration attempt with existing email: {user_create.email}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+    if crud.get_user_by_username(db, username=user_create.username):
+        logger.warning(f"Registration attempt with existing username: {user_create.username}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken")
+
+    # Generate a unique affiliate_id for ALL new users, as per your requirement.
+    affiliate_id = str(uuid.uuid4()) # Generate unconditionally for every new registration
+
+    user = crud.create_user(
+        db=db,
+        user=user_create,
+        affiliate_id=affiliate_id,
     )
 
-# --- User Authentication and Authorization Endpoints ---
+    if user is None:
+        logger.error(f"Failed to create user after checks for username: {user_create.username}, email: {user_create.email}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User creation failed due to an internal error or duplicate entry not caught earlier.")
 
-# User Registration
-@router.post("/register", response_model=ModelUserResponse, status_code=status.HTTP_201_CREATED)
-async def register_user(user: ModelUserCreate, db: Session = Depends(get_db)):
-    # Check if username or email already exists
-    db_user_by_username = db.query(User).filter(User.username == user.username).first()
-    if db_user_by_username:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered"
-        )
-    db_user_by_email = db.query(User).filter(User.email == user.email).first()
-    if db_user_by_email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+    # Send welcome email as a background task
+    login_url = str(request.url).replace("/register", "/login") # Construct login URL dynamically
+    background_tasks.add_task(send_welcome_email, user.email, user.username, login_url)
+    logger.info(f"Scheduled welcome email for new user: {user.username}")
 
-    actual_referring_affiliate_id = None
-    # NEW LOGIC: Prioritize lookup by referring_referral_code
-    if user.referring_referral_code:
-        referring_user_by_code = db.query(User).filter(User.referral_code == user.referring_referral_code).first()
-        if not referring_user_by_code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Referring referral code '{user.referring_referral_code}' not found."
-            )
-        # Use the affiliate_id of the found referring user
-        actual_referring_affiliate_id = referring_user_by_code.affiliate_id
-    # Existing logic: Fallback to referring_affiliate_id if referring_referral_code was not provided
-    elif user.referring_affiliate_id:
-        referring_user_by_affiliate_id = db.query(User).filter(User.affiliate_id == user.referring_affiliate_id).first()
-        if not referring_user_by_affiliate_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Referring affiliate ID not found."
-            )
-        actual_referring_affiliate_id = referring_user_by_affiliate_id.affiliate_id # Use the affiliate_id of the found referring user
+    return user
 
-    hashed_password = get_password_hash(user.password)
+@router.post("/login", response_model=Token)
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
+):
+    logger.debug(f"Login attempt for username: {form_data.username}")
+    user = crud.get_user_by_username(db, username=form_data.username)
 
-    db_user = User(
-        username=user.username,
-        email=user.email,
-        hashed_password=hashed_password,
-        full_name=user.full_name,
-        bio=user.bio,
-        profile_picture_url=user.profile_picture_url,
-        social_links=user.social_links,
-        role=user.role if user.role else User.role.default.arg,
-        permissions_level=user.permissions_level, # Ensure permissions_level is passed
-        referring_affiliate_id=actual_referring_affiliate_id # This will be the affiliate_id of the referrer
-    )
-
-    # Existing logic: Generate and assign affiliate_id if not provided
-    if user.affiliate_id is None:
-        db_user.affiliate_id = str(uuid.uuid4())
-    else:
-        # If affiliate_id was provided, check its uniqueness before assigning
-        if db.query(User).filter(User.affiliate_id == user.affiliate_id).first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provided affiliate ID already exists."
-            )
-        db_user.affiliate_id = user.affiliate_id
-
-    # NEW LOGIC: Generate and assign referral_code if not provided, or validate if provided
-    if user.referral_code is None:
-        db_user.referral_code = generate_unique_referral_code(db) # Auto-generate
-    else:
-        # If referral_code was provided in the payload (e.g., for vanity/pre-defined codes)
-        # We need to validate its uniqueness
-        if db.query(User).filter(User.referral_code == user.referral_code).first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provided referral code already exists."
-            )
-        db_user.referral_code = user.referral_code
-
-    # NEW LOGIC: Handle user_type_ids association
-    if user.user_type_ids:
-        # Fetch the UserTypeOption objects based on provided IDs
-        user_types = db.query(UserTypeOption).filter(UserTypeOption.id.in_(user.user_type_ids)).all()
-        # Check if all provided IDs mapped to actual UserTypeOption objects
-        if len(user_types) != len(user.user_type_ids):
-            # This means some provided user_type_ids were invalid
-            invalid_ids = set(user.user_type_ids) - set(ut.id for ut in user_types)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"One or more user_type_ids provided are invalid: {', '.join(invalid_ids)}"
-            )
-        db_user.user_types = user_types # Assign the list of UserTypeOption objects
-
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
-
-# User Login (Get Access Token)
-@router.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()
+    # If user is not found, or password verification fails, raise an HTTPException
+    # The temporary debug detail has been removed for security in a live environment.
     if not user or not verify_password(form_data.password, user.hashed_password):
+        logger.warning(f"Failed login attempt for username: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail="Incorrect username or password", # Reverted to generic message
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # CRITICAL FIX: Change 'sub' claim from user.id to user.username
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
-# Get Current User - Path adjusted to match documentation
-@router.get("/users/me", response_model=ModelUserResponse) # Path here remains /users/me, combines with /auth prefix to be /auth/users/me
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+    # Convert UserRole enum to string for JWT claims
+    user_roles = [role.value for role in user.role] if isinstance(user.role, list) else [user.role.value] if user.role else []
 
-# Get User by ID - Path adjusted to match documentation
-@router.get("/users/{user_id}", response_model=ModelUserResponse) # Path here remains /users/{user_id}, combines with /auth prefix to be /auth/users/{user_id}
-async def read_user_by_id(user_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if db_user is None:
+
+    access_token = create_access_token(
+        data={"sub": user.username, "user_id": str(user.id), "roles": user_roles},
+        expires_delta=access_token_expires
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": user.username, "user_id": str(user.id)},
+        expires_delta=refresh_token_expires
+    )
+    logger.info(f"User {user.username} successfully logged in and tokens generated.")
+    return {"access_token": access_token, "token_type": "bearer", "refresh_token": refresh_token}
+
+@router.post("/token/refresh", response_model=Token)
+async def refresh_access_token(
+    refresh_token: str = Depends(oauth2_scheme), # Expect refresh token in Authorization header
+    db: Session = Depends(get_db)
+):
+    """
+    Refreshes the access token using a valid refresh token.
+    """
+    try:
+        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
+
+        if username is None or user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token payload")
+
+        user = crud.get_user(db, user_id=user_id) # Use get_user by ID for refresh
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        # Convert UserRole enum to string for JWT claims
+        user_roles = [role.value for role in user.role] if isinstance(user.role, list) else [user.role.value] if user.role else []
+
+
+        # Generate a new access token
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        new_access_token = create_access_token(
+            data={"sub": user.username, "user_id": str(user.id), "roles": user_roles},
+            expires_delta=access_token_expires
+        )
+
+        logger.info(f"Access token refreshed for user: {username}")
+        return {"access_token": new_access_token, "token_type": "bearer", "refresh_token": refresh_token} # Return original refresh token
+    except JWTError:
+        logger.warning("Invalid refresh token provided.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+# TEMPORARY: The debug-reset-superuser-password endpoint has been removed for security.
+
+@router.post("/password-reset-request", status_code=status.HTTP_200_OK)
+async def request_password_reset(
+    password_reset_request: ResetPasswordRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    logger.debug(f"Password reset request for email: {password_reset_request.email}")
+    user = crud.get_user_by_email(db, email=password_reset_request.email)
+    if not user:
+        # For security, do not reveal if the email is not registered
+        logger.warning(f"Password reset requested for unregistered email: {password_reset_request.email}")
+        return {"message": "If a matching account is found, a password reset email will be sent."}
+
+    # Generate a password reset token (e.g., a short-lived JWT or a UUID)
+    reset_token_data = {"sub": user.username, "user_id": str(user.id), "type": "password_reset"}
+    reset_token_expires = timedelta(minutes=60) # Token valid for 60 minutes
+    reset_token = create_access_token(reset_token_data, expires_delta=reset_token_expires)
+
+    # Construct reset URL
+    # Assuming your frontend handles /reset-password?token=<token>
+    reset_url = f"{request.base_url}reset-password?token={reset_token}"
+    logger.info(f"Generated password reset token for {user.username}. Reset URL: {reset_url}")
+
+    # Send email in background
+    background_tasks.add_task(send_reset_password_email, user.email, user.username, reset_url)
+    logger.info(f"Scheduled password reset email for user: {user.username}")
+
+    return {"message": "If a matching account is found, a password reset email will be sent."}
+
+@router.post("/password-reset-confirm", status_code=status.HTTP_200_OK)
+async def confirm_password_reset(
+    password_reset: PasswordResetConfirm,
+    db: Session = Depends(get_db)
+):
+    logger.debug("Password reset confirmation attempt.")
+    try:
+        payload = jwt.decode(password_reset.token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
+        token_type: str = payload.get("type")
+
+        if username is None or user_id is None or token_type != "password_reset":
+            logger.warning("Invalid token payload for password reset confirmation.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token payload")
+
+    except JWTError as e:
+        logger.warning(f"Invalid or expired JWT for password reset: {e}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+    user = crud.get_user_by_username(db, username=username)
+    if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return db_user
+
+    # Update the user's password
+    hashed_password = get_password_hash(password_reset.new_password)
+    updated_user = crud.update_user_password(db, user=user, hashed_password=hashed_password)
+
+    if not updated_user:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update password")
+
+    return {"message": "Password has been successfully reset."}
+
+# Dummy email sending function (replace with actual email service)
+async def send_welcome_email(email_to: str, username: str, login_url: str):
+    logger.info(f"Sending welcome email to {email_to} for user {username} with login link {login_url}")
+    # In a real application, you would integrate with an email service here (e.g., SendGrid, Mailgun)
+    pass
+
+async def send_reset_password_email(email_to: str, username: str, reset_url: str):
+    logger.info(f"Sending password reset email to {email_to} for user {username} with reset link {reset_url}")
+    # In a real application, integrate with an email service here
+    pass

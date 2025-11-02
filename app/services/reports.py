@@ -1,554 +1,377 @@
 # app/services/reports.py
 
+import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select
-from datetime import datetime, timedelta, date # NEW: Import date for specific type hinting
-import random
-from typing import Dict, Any, List, Optional
+from typing import List, Dict, Any, Optional
+from datetime import date, datetime, timedelta, timezone # Added timezone import
 import logging
-import uuid # Import uuid for dummy IDs
 
-# Import your database models
-from app.models.user import User, UserRole
 from app.models.content import Content, ContentType, ContentStatus
-from app.models.nft import MintedMemorialEntry
-from app.models.affiliate import Affiliate
-from app.models.referral import Referral
+from app.models.user import User
+# CORRECTED: Import NFT instead of MintedMemorialEntry
+from app.models.nft import NFT
+# CORRECTED: Adjust get_nfts_by_minter_user to align with new model name if necessary,
+# or assume it's fetching the new NFT objects.
+from app.services.nft_service import get_nfts_by_minter_user
+from app.models.activity_log import ActivityLog
 
 logger = logging.getLogger(__name__)
 
-# --- Admin Reports ---
-
-async def get_users_summary_report(db: Session) -> Dict[str, Any]: # RENAMED from _dummy, now uses DB
+async def get_user_profile_summary(db: Session, user_id: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieves a summary of user statistics from the database.
+    Retrieves a user profile summary for the specified user from the database.
+    Returns None if the user is not found.
     """
-    logger.info("Reports Service: Generating users summary report from database.")
+    logger.info(f"Reports Service: Retrieving profile summary for user_id: {user_id} from database.")
 
-    # Total users
-    total_users = db.query(User).count()
+    # Fetch user details
+    user = db.scalar(select(User).filter(User.id == user_id))
 
-    # Users by role
-    users_by_role_query = db.query(User.role, func.count(User.id)).group_by(User.role).all()
-    users_by_role = {role.value: count for role, count in users_by_role_query} # Convert enum to string
+    if not user:
+        logger.warning(f"Reports Service: User with ID {user_id} not found for profile summary.")
+        return None # Return None if user not found, controller will handle 404
 
-    # New users in last 30 days
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    new_users_last_30_days = db.query(User).filter(User.created_at >= thirty_days_ago).count()
+    # Get total content created
+    total_content_created = db.scalar(
+        select(func.count(Content.id)).filter(Content.owner_user_id == user_id)
+    )
 
-    return {
-        "report_name": "User Summary Report",
-        "date_generated": datetime.utcnow().isoformat(),
-        "total_users": total_users,
-        "users_by_role": users_by_role,
-        "new_users_last_30_days": new_users_last_30_days
-    }
-
-
-async def get_content_summary_report_dummy(db: Session) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy content summary report.
-    """
-    logger.info("Reports Service: Generating dummy content summary report.")
-    return {
-        "report_name": "Content Summary Report",
-        "date_generated": datetime.utcnow().isoformat(),
-        "total_content_items": random.randint(10, 50),
-        "content_by_type": {
-            "Art": random.randint(5, 20),
-            "Music": random.randint(3, 10),
-            "Writing": random.randint(2, 8),
-            "Photography": random.randint(1, 5),
-            "Video": random.randint(1, 5)
-        },
-        "content_by_status": {
-            "published": random.randint(8, 40),
-            "pending": random.randint(1, 5),
-            "draft": random.randint(1, 3)
+    # Prepare profile summary
+    profile_summary = {
+        "user_id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "role": user.role.value,
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+        "profile_picture_url": user.profile_picture_url,
+        "social_links": user.social_links,
+        "has_api_access": user.has_api_access,
+        "referral_code": user.referral_code,
+        "referred_by_user_id": user.referred_by_user_id,
+        "referred_by_referral_code": user.referred_by_referral_code,
+        "created_at": user.created_at.isoformat(),
+        "last_updated_at": user.last_updated_at.isoformat(),
+        # Initialize with default values
+        "nft_collection": [],
+        "content_items": [],
+        "activity_log": [],
+        "earnings_report": {
+            "report_name": "User Earnings Report",
+            "date_generated": datetime.now(),
+            "total_content_sales_value": 0.0,
+            "total_commissions_received": 0.0,
+            "currency": "USD",
+            "earnings_breakdown": []
         }
     }
 
+    # Fetch NFT collection, recent content, and activity log
+    # CORRECTED: get_user_nft_collection should now fetch NFT objects
+    nft_collection = await get_user_nft_collection(db, user_id, skip=0, limit=100)
+    recent_content = await get_user_content(db, user_id, limit=3)
+    recent_activity_log = await get_user_activity_log(db, user_id, limit=3)
+    earnings_report = await get_user_earnings(db, user_id) # Using the production-ready earnings function
 
-async def get_users_report_dummy(db: Session, skip: int = 0, limit: int = 100, role: Optional[UserRole] = None, is_active: Optional[bool] = None) -> List[Dict[str, Any]]:
+    profile_summary["nft_collection"] = [
+        {
+            "id": nft.id,
+            "token_id": nft.token_id,
+            "name": nft.name,
+            "image_url": nft.image_url,
+            "minted_at": nft.minted_at.isoformat()
+        } for nft in nft_collection
+    ]
+    profile_summary["content_items"] = [
+        {
+            "id": content.id,
+            "title": content.title,
+            "content_type": content.content_type.value,
+            "created_at": content.created_at.isoformat()
+        } for content in recent_content
+    ]
+    profile_summary["activity_log"] = [
+        {
+            "id": log.id,
+            "action": log.action,
+            "timestamp": log.timestamp.isoformat()
+        } for log in recent_activity_log
+    ]
+    profile_summary["earnings_report"] = earnings_report # Assign the full report
+
+    return profile_summary
+
+async def get_user_content(db: Session, user_id: str, limit: int = 5) -> List[Content]:
     """
-    Placeholder: Generates a list of dummy user data.
+    Retrieves recent content items created by the user.
     """
-    logger.info(f"Reports Service: Generating dummy users report with skip={skip}, limit={limit}, role={role}, is_active={is_active}.")
-    dummy_users = [
-        {"id": "1", "username": "admin_user", "email": "admin@example.com", "role": UserRole.ADMIN.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(100, 365))).isoformat()},
-        {"id": "2", "username": "artist_one", "email": "artist1@example.com", "role": UserRole.ARTIST.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(50, 200))).isoformat()},
-        {"id": "3", "username": "consumer_a", "email": "consumer_a@example.com", "role": UserRole.CONSUMER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 60))).isoformat()},
-        {"id": "4", "username": "moderator_alpha", "email": "mod@example.com", "role": UserRole.MODERATOR.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(80, 250))).isoformat()},
-        {"id": "5", "username": "inactive_user", "email": "inactive@example.com", "role": UserRole.CONSUMER.value, "is_active": False, "created_at": (datetime.utcnow() - timedelta(days=random.randint(30, 100))).isoformat()},
-        {"id": "6", "username": "new_artist", "email": "new_art@example.com", "role": UserRole.ARTIST.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 7))).isoformat()},
-        {"id": "7", "username": "new_consumer", "email": "new_con@example.com", "role": UserRole.CONSUMER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 24))).isoformat()},
-        {"id": "8", "username": "referred_user_b", "email": "refb@example.com", "role": UserRole.CONSUMER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 40))).isoformat()},
-        {"id": "9", "username": "referred_user_c", "email": "refc@example.com", "role": UserRole.CONSUMER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(20, 50))).isoformat()},
-        {"id": "10", "username": "independent_user", "email": "independent@example.com", "role": UserRole.CONSUMER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(40, 120))).isoformat()},
-        {"id": "100", "username": "new_unique_username", "email": "new_unique_email@example.com", "role": UserRole.REGISTERED_USER.value, "is_active": True, "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 30))).isoformat()},
+    logger.info(f"Reports Service: Retrieving recent content for user_id: {user_id}")
+    return db.scalars(
+        select(Content)
+        .filter(Content.owner_user_id == user_id)
+        .order_by(Content.created_at.desc())
+        .limit(limit)
+    ).all()
+
+async def get_user_nft_collection(db: Session, user_id: str, skip: int = 0, limit: int = 10) -> List[NFT]:
+    """
+    Retrieves the NFT collection for a given user.
+    """
+    logger.info(f"Reports Service: Retrieving NFT collection for user_id: {user_id}")
+    # CORRECTED: Use NFT model directly
+    return db.scalars(
+        select(NFT)
+        .filter(NFT.owner_id == user_id)
+        .offset(skip)
+        .limit(limit)
+    ).all()
+
+
+async def get_user_activity_log(db: Session, user_id: str, limit: int = 5) -> List[ActivityLog]:
+    """
+    Retrieves recent activity logs for a given user.
+    """
+    logger.info(f"Reports Service: Retrieving recent activity log for user_id: {user_id}")
+    return db.scalars(
+        select(ActivityLog)
+        .filter(ActivityLog.user_id == user_id)
+        .order_by(ActivityLog.timestamp.desc())
+        .limit(limit)
+    ).all()
+
+async def get_user_earnings(db: Session, user_id: str) -> Dict[str, Any]:
+    """
+    Calculates the total earnings for a user from content sales and commissions.
+    This is a more production-ready example that aggregates data.
+    """
+    logger.info(f"Reports Service: Calculating earnings for user_id: {user_id}")
+
+    # Total sales from content owned by the user
+    total_content_sales = db.scalar(
+        select(func.sum(Content.sales))
+        .filter(Content.owner_user_id == user_id)
+    ) or 0.0
+
+    # Total commissions received (if your User model or another model tracks this)
+    # For now, let's assume a placeholder or a simple calculation
+    # In a real system, you'd likely have a 'commissions' table or similar.
+    # To properly get 'user' object if it's not passed, you might need:
+    user_instance = db.scalar(select(User).filter(User.id == user_id))
+    total_commissions_received = user_instance.total_commissions_earned if user_instance and hasattr(user_instance, 'total_commissions_earned') else 0.0
+
+
+    earnings_breakdown = [
+        {"source": "Content Sales", "amount": total_content_sales, "currency": "USD"},
+        {"source": "Referral Commissions", "amount": total_commissions_received, "currency": "USD"}
     ]
 
-    filtered_users = []
-    for user in dummy_users:
-        match = True
-        if role and user["role"] != role.value:
-            match = False
-        if is_active is not None and user["is_active"] != is_active:
-            match = False
-        if match:
-            filtered_users.append(user)
-
-    return filtered_users[skip:skip+limit]
-
-
-async def get_content_report_dummy(db: Session, skip: int = 0, limit: int = 100, content_type: Optional[ContentType] = None, status: Optional[ContentStatus] = None) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy content data.
-    """
-    logger.info(f"Reports Service: Generating dummy content report with skip={skip}, limit={limit}, type={content_type}, status={status}.")
-    dummy_content = [
-        {"id": 1, "type": ContentType.ART.value, "status": ContentStatus.PUBLISHED.value, "views": 1500, "sales": 150.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(5, 20))).isoformat(), "creator_username": "artist_one"},
-        {"id": 2, "type": ContentType.MUSIC.value, "status": ContentType.PUBLISHED.value, "views": 2500, "sales": 250.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(2, 10))).isoformat(), "creator_username": "artist_one"},
-        {"id": 3, "type": ContentType.WRITING.value, "status": ContentType.PUBLISHED.value, "views": 800, "sales": 80.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 30))).isoformat(), "creator_username": "new_unique_username"},
-        {"id": 4, "type": ContentType.ART.value, "status": ContentType.PENDING.value, "views": 50, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 3))).isoformat(), "creator_username": "new_artist"},
-        {"id": 5, "type": ContentType.MUSIC.value, "status": ContentType.PUBLISHED.value, "views": 1200, "sales": 120.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 24))).isoformat(), "creator_username": "artist_one"},
-        {"id": 6, "type": ContentType.WRITING.value, "status": ContentType.DRAFT.value, "views": 100, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(7, 14))).isoformat(), "creator_username": "new_unique_username"},
-        {"id": 7, "type": ContentType.ART.value, "status": ContentType.PUBLISHED.value, "views": 3000, "sales": 300.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(12, 48))).isoformat(), "creator_username": "artist_one"},
-        {"id": 8, "type": ContentType.MUSIC.value, "status": ContentType.PUBLISHED.value, "views": 4000, "sales": 400.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(3, 8))).isoformat(), "creator_username": "new_artist"},
-        {"id": 9, "type": ContentType.ART.value, "status": ContentType.PUBLISHED.value, "views": 2000, "sales": 200.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(6, 18))).isoformat(), "creator_username": "new_unique_username"},
-        {"id": 10, "type": ContentType.WRITING.value, "status": ContentType.PUBLISHED.value, "views": 1000, "sales": 100.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(20, 40))).isoformat(), "creator_username": "independent_user"},
-        {"id": 11, "type": ContentType.PHOTOGRAPHY.value, "status": ContentType.PUBLISHED.value, "views": 900, "sales": 90.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(2, 10))).isoformat(), "creator_username": "new_artist"},
-        {"id": 12, "type": ContentType.VIDEO.value, "status": ContentType.PUBLISHED.value, "views": 5000, "sales": 500.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 5))).isoformat(), "creator_username": "artist_one"},
-        {"id": 13, "type": ContentType.ART.value, "status": ContentType.PUBLISHED.value, "views": 1800, "sales": 180.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(10, 30))).isoformat(), "creator_username": "new_unique_username"},
-    ]
-
-    filtered_content = []
-    for item in dummy_content:
-        match = True
-        if content_type and item["type"] != content_type.value:
-            match = False
-        if status and item["status"] != status.value:
-            match = False
-        if match:
-            filtered_content.append(item)
-
-    return filtered_content[skip:skip+limit]
-
-# --- User-Specific Reports (Dummy Data) ---
-
-async def get_user_profile_summary_dummy(db: Session, user_id: str) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy summary of a user's profile.
-    """
-    logger.info(f"Reports Service: Generating dummy user profile summary for user_id: {user_id}.")
-    return {
-        "report_name": f"User Profile Summary for {user_id}",
-        "date_generated": datetime.utcnow().isoformat(),
-        "total_content_created": random.randint(5, 20),
-        "total_nfts_owned": random.randint(1, 10),
-        "total_views_on_content": random.randint(1000, 10000),
-        "total_earnings_usd": round(random.uniform(50.00, 500.00), 2),
-        "last_login": (datetime.utcnow() - timedelta(hours=random.randint(1, 24))).isoformat(),
-    }
-
-async def get_user_nft_collection_dummy(db: Session, user_id: str, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy NFT data for a specific user.
-    """
-    logger.info(f"Reports Service: Generating dummy NFT collection for user_id: {user_id}, skip={skip}, limit={limit}.")
-    dummy_nfts = []
-    for i in range(random.randint(1, 10)):
-        dummy_nfts.append({
-            "nft_id": str(uuid.uuid4()),
-            "title": f"Dummy NFT {i+1} by {user_id}",
-            "token_id": f"dummy_token_{random.randint(1000, 9999)}",
-            "mint_date": (datetime.utcnow() - timedelta(days=random.randint(1, 365))).isoformat(),
-            "price_usd": round(random.uniform(10.00, 1000.00), 2),
-            "is_listed_for_sale": random.choice([True, False]),
-        })
-    return dummy_nfts[skip:skip+limit]
-
-async def get_user_content_dummy(db: Session, user_id: str, skip: int = 0, limit: int = 100, status: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy content items created by a specific user.
-    """
-    logger.info(f"Reports Service: Generating dummy user content for user_id: {user_id}, skip={skip}, limit={limit}, status={status}.")
-    dummy_user_content = []
-    content_statuses = ["published", "draft", "pending", "rejected"]
-    for i in range(random.randint(3, 15)):
-        item_status = random.choice(content_statuses)
-        if status is None or item_status == status:
-            dummy_user_content.append({
-                "content_id": str(uuid.uuid4()),
-                "title": f"Dummy Content {i+1} by {user_id}",
-                "content_type": random.choice(["Art", "Music", "Writing", "Video"]),
-                "status": item_status,
-                "views": random.randint(100, 5000),
-                "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 180))).isoformat(),
-                "last_updated": datetime.utcnow().isoformat(),
-            })
-    return dummy_user_content[skip:skip+limit]
-
-async def get_user_activity_log_dummy(db: Session, user_id: str, skip: int = 0, limit: int = 100, activity_type: Optional[str] = None, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy activity log entries for a specific user.
-    """
-    logger.info(f"Reports Service: Generating dummy user activity log for user_id: {user_id}, type={activity_type}, start_date={start_date}, end_date={end_date}.")
-    dummy_activity_log = []
-    activity_types = ["login", "purchase", "view_nft", "create_content", "comment", "like"]
-    for i in range(random.randint(10, 50)):
-        activity_time = datetime.utcnow() - timedelta(days=random.randint(0, 90), hours=random.randint(0, 23))
-        event_type = random.choice(activity_types)
-        
-        if (activity_type is None or event_type == activity_type) and \
-           (start_date is None or activity_time >= start_date) and \
-           (end_date is None or activity_time <= end_date):
-            dummy_activity_log.append({
-                "log_id": str(uuid.uuid4()),
-                "timestamp": activity_time.isoformat(),
-                "event_type": event_type,
-                "description": f"User {user_id} performed {event_type} event {i+1}",
-                "details": {"ip_address": f"192.168.1.{random.randint(1, 254)}"}
-            })
-    return dummy_activity_log[skip:skip+limit]
-
-async def get_user_earnings_dummy(db: Session, user_id: str, start_date: Optional[date] = None, end_date: Optional[date] = None, currency: str = "USD") -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy earnings summary for a specific user (e.g., content creator).
-    """
-    logger.info(f"Reports Service: Generating dummy user earnings for user_id: {user_id}, start_date={start_date}, end_date={end_date}, currency={currency}.")
-    total_content_sales = round(random.uniform(100.00, 2000.00), 2)
-    total_commissions_received = round(random.uniform(10.00, 200.00), 2)
-    
-    return {
-        "report_name": f"User Earnings Report for {user_id}",
-        "date_generated": datetime.utcnow().isoformat(),
+    report = {
+        "report_name": "User Earnings Report",
+        "date_generated": datetime.now(),
         "total_content_sales_value": total_content_sales,
         "total_commissions_received": total_commissions_received,
-        "currency": currency,
-        "earnings_breakdown": [
-            {"date": (datetime.utcnow() - timedelta(days=random.randint(1, 30))).isoformat(), "amount": round(random.uniform(5.00, 100.00), 2), "source": "Content Sale", "content_id": str(uuid.uuid4())},
-            {"date": (datetime.utcnow() - timedelta(days=random.randint(1, 30))).isoformat(), "amount": round(random.uniform(1.00, 20.00), 2), "source": "Referral Commission", "referral_id": str(uuid.uuid4())}
-        ]
-    }
-
-# --- Affiliate Reports (Dummy Data) ---
-
-async def get_affiliate_summary_report_dummy(db: Session, affiliate_id: str) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy summary report for a specific affiliate.
-    """
-    logger.info(f"Reports Service: Generating dummy affiliate summary report for affiliate_id: {affiliate_id}.")
-    return {
-        "report_name": f"Affiliate Summary Report for {affiliate_id}",
-        "date_generated": datetime.utcnow().isoformat(),
-        "total_referrals": random.randint(10, 50),
-        "total_clicks": random.randint(100, 500),
-        "estimated_earnings_usd": round(random.uniform(50.00, 500.00), 2),
-        "conversion_rate": round(random.uniform(0.05, 0.20), 2),
-    }
-
-async def get_affiliate_referrals_report_dummy(db: Session, affiliate_id: str, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy referral details for a specific affiliate.
-    """
-    logger.info(f"Reports Service: Generating dummy affiliate referrals report for affiliate_id: {affiliate_id}, skip={skip}, limit={limit}.")
-    dummy_referrals = []
-    for i in range(random.randint(5, 15)):
-        dummy_referrals.append({
-            "referred_user_id": str(uuid.uuid4()),
-            "referred_username": f"referred_user_{i+1}",
-            "registration_date": (datetime.utcnow() - timedelta(days=random.randint(1, 90))).isoformat(),
-            "first_purchase_value": round(random.uniform(10.00, 100.00), 2) if random.random() > 0.3 else 0.00,
-            "commission_earned": round(random.uniform(1.00, 10.00), 2) if random.random() > 0.3 else 0.00,
-        })
-    return dummy_referrals[skip:skip+limit]
-
-async def get_affiliate_clicks_report_dummy(db: Session, affiliate_id: str, skip: int = 0, limit: int = 100, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a list of dummy link click details for a specific affiliate.
-    """
-    logger.info(f"Reports Service: Generating dummy affiliate clicks report for affiliate_id: {affiliate_id}, skip={skip}, limit={limit}, start_date={start_date}, end_date={end_date}.")
-    dummy_clicks = []
-    for i in range(random.randint(20, 50)):
-        click_date = datetime.utcnow() - timedelta(days=random.randint(1, 60))
-        if (start_date is None or click_date >= start_date) and \
-           (end_date is None or click_date <= end_date):
-            dummy_clicks.append({
-                "click_id": str(uuid.uuid4()),
-                "click_timestamp": click_date.isoformat(),
-                "ip_address": f"192.168.1.{random.randint(1, 254)}",
-                "user_agent": "Mozilla/5.0 (Dummy)",
-                "referred_user_id": str(uuid.uuid4()) if random.random() > 0.5 else None, # Simulate some clicks leading to signups
-            })
-    return dummy_clicks[skip:skip+limit]
-
-async def get_affiliate_earnings_report_dummy(db: Session, affiliate_id: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy earnings summary for a specific affiliate.
-    """
-    logger.info(f"Reports Service: Generating dummy affiliate earnings report for affiliate_id: {affiliate_id}, start_date={start_date}, end_date={end_date}.")
-    
-    total_commissions = round(random.uniform(50.00, 1000.00), 2)
-    total_referred_sales = round(random.uniform(500.00, 10000.00), 2)
-    
-    return {
-        "report_name": f"Affiliate Earnings Report for {affiliate_id}",
-        "date_generated": datetime.utcnow().isoformat(),
-        "total_commissions_earned": total_commissions,
-        "total_referred_sales_value": total_referred_sales,
-        "commission_details": [
-            {"date": (datetime.utcnow() - timedelta(days=random.randint(1, 30))).isoformat(), "amount": round(random.uniform(1.00, 50.00), 2), "source": "NFT Sale" if random.random() > 0.5 else "Subscription"},
-            {"date": (datetime.utcnow() - timedelta(days=random.randint(1, 30))).isoformat(), "amount": round(random.uniform(1.00, 50.00), 2), "source": "NFT Sale" if random.random() > 0.5 else "Subscription"}
-        ]
-    }
-
-
-# --- Superuser Reports ---
-
-async def get_token_usage_report_dummy(db: Session) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy token usage report.
-    """
-    logger.info("Reports Service: Generating dummy token usage report.")
-    today = datetime.utcnow().date()
-    usage_by_day = [
-        {"date": (today - timedelta(days=i)).isoformat(), "calls": random.randint(800, 4000)}
-        for i in range(7)
-    ]
-    return {
-        "report_name": "Token Usage Report",
-        "date_range": {"start": "beginning", "end": "now"},
-        "total_api_calls": random.randint(200000, 500000),
-        "unique_tokens_used": random.randint(300, 500),
-        "most_active_token_ids": [str(random.randint(1000, 9999)) for _ in range(3)],
-        "usage_by_day": usage_by_day
-    }
-
-async def get_nft_mint_activity_report_dummy(db: Session) -> List[Dict[str, Any]]:
-    """
-    Placeholder: Generates a dummy NFT minting activity report.
-    """
-    logger.info("Reports Service: Generating dummy NFT mint activity report.")
-
-    dummy_mints = []
-    statuses = ["success", "failed", "pending"]
-    for i in range(10):
-        status = random.choice(statuses)
-        mint_entry = {
-            "mint_id": f"mint-{random.randint(10000, 99999)}",
-            "nft_id": f"nft-{random.randint(1000, 9999)}",
-            "minter_id": str(uuid.uuid4()),
-            "status": status,
-            "mint_date": (datetime.utcnow() - timedelta(days=random.randint(0, 30))).isoformat(),
-            "transaction_hash": f"0x{uuid.uuid4().hex}" if status == "success" else None,
-            "error_message": "Insufficient funds" if status == "failed" and random.random() > 0.5 else None
-        }
-        dummy_mints.append(mint_entry)
-    return dummy_mints
-
-async def get_financial_report_dummy(db: Session) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy financial overview report.
-    """
-    logger.info("Reports Service: Generating dummy financial report.")
-    total_revenue = round(random.uniform(5000.00, 10000.00), 2)
-    total_expenses = round(random.uniform(10000.00, 20000.00), 2)
-    net_profit = round(total_revenue - total_expenses, 2)
-    return {
-        "report_name": "Financial Overview",
-        "date_range": {"start": "beginning", "end": "now"},
-        "total_revenue": total_revenue,
-        "total_expenses": total_expenses,
-        "net_profit": net_profit,
         "currency": "USD",
-        "revenue_breakdown_by_source": {
-            "NFT Sales": round(total_revenue * 0.6, 2),
-            "Service Fees": round(total_revenue * 0.3, 2),
-            "Other": round(total_revenue * 0.1, 2)
-        }
+        "earnings_breakdown": earnings_breakdown
+    }
+    return report
+
+async def get_users_summary_report(db: Session) -> Dict[str, Any]:
+    """
+    Generates a summary report of all users, including total counts,
+    users by role, and new users in the last 30 days.
+    """
+    logger.info("Reports Service: Generating users summary report.")
+
+    total_users = db.scalar(select(func.count(User.id)))
+    active_users = db.scalar(select(func.count(User.id)).filter(User.is_active == True))
+    verified_users = db.scalar(select(func.count(User.id)).filter(User.is_verified == True))
+
+    users_by_role = db.execute(
+        select(User.role, func.count(User.id))
+        .group_by(User.role)
+    ).all()
+    users_by_role_dict = {role.value: count for role, count in users_by_role}
+
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+    new_users_last_30_days = db.scalar(
+        select(func.count(User.id))
+        .filter(User.created_at >= thirty_days_ago)
+    )
+
+    # Basic API Usage (dummy data)
+    total_requests = 100000
+    authenticated_requests = 75000
+    unauthenticated_requests = 25000
+
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "verified_users": verified_users,
+        "users_by_role": users_by_role_dict,
+        "new_users_last_30_days": new_users_last_30_days,
+        "api_usage_summary": {
+            "total_requests": total_requests,
+            "authenticated_requests": authenticated_requests,
+            "unauthenticated_requests": unauthenticated_requests
+        },
+        "report_generated_at": datetime.now().isoformat()
     }
 
-async def get_ipfs_costs_report_dummy(db: Session) -> Dict[str, Any]:
+# 👇 NEW CODE ADDED HERE 👇
+async def get_users_report(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None
+) -> List[Dict[str, Any]]:
     """
-    Placeholder: Generates a dummy IPFS costs report.
+    Retrieves a detailed list of users, with optional filtering by role and active status.
     """
-    logger.info("Reports Service: Generating dummy IPFS costs report.")
-    total_storage_gb = round(random.uniform(1000.00, 5000.00), 2)
-    total_retrieval_gb = round(random.uniform(500.00, 2000.00), 2)
-    estimated_monthly_cost = round(random.uniform(100.00, 500.00), 2)
+    logger.info(f"Reports Service: Retrieving detailed users report with filters: role={role}, is_active={is_active}, skip={skip}, limit={limit}")
+
+    query = select(User)
+
+    if role:
+        # Assuming User.role is an Enum or comparable string value
+        query = query.filter(User.role == role)
+    if is_active is not None:
+        query = query.filter(User.is_active == is_active)
+
+    users = db.scalars(
+        query.offset(skip).limit(limit)
+    ).all()
+
+    # Format the user data for the report
+    detailed_users_data = []
+    for user in users:
+        detailed_users_data.append({
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "role": user.role.value,
+            "is_active": user.is_active,
+            "is_verified": user.is_verified,
+            "created_at": user.created_at.isoformat(),
+            "last_updated_at": user.last_updated_at.isoformat(),
+            # Add any other user fields you want in the detailed report
+        })
+    return detailed_users_data
+# 👆 NEW CODE ADDED HERE 👆
+
+# --- NEWLY ADDED CODE TO PREVENT API CRASH ---
+async def get_content_summary_report(db: Session) -> Dict[str, Any]:
+    """
+    Placeholder for fetching a summary of content data.
+    You will need to implement the actual logic here to query your
+    content-related models (e.g., Content, Post, Article, etc.)
+    For now, it returns dummy data to prevent API crash.
+
+    Example if you have a Content model (uncomment and adapt 'Content' as needed):
+    # from app.models.content import Content
+    # total_content = await db.scalar(select(func.count(Content.id)))
+    # published_content = await db.scalar(select(func.count(Content.id)).where(Content.status == ContentStatus.PUBLISHED))
+    # drafts = await db.scalar(select(func.count(Content.id)).where(Content.status == ContentStatus.DRAFT))
+    """
+    logger.info("Reports Service: Generating content summary report (placeholder).")
     return {
-        "report_name": "IPFS Costs Report",
-        "date_range": {"start": "beginning", "end": "now"},
-        "total_storage_gb": total_storage_gb,
-        "total_retrieval_gb": total_retrieval_gb,
-        "estimated_monthly_cost_usd": estimated_monthly_cost,
-        "cost_by_content_type": {
-            "NFT Images": round(estimated_monthly_cost * 0.1, 2),
-            "Memorial Data": round(estimated_monthly_cost * 0.3, 2),
-            "User Profile Assets": round(estimated_monthly_cost * 0.2, 2)
-        }
+        "status": "success",
+        "message": "Content summary report placeholder executed. Implement actual logic for content models here.",
+        "total_content_items": 0,  # Replace with actual count
+        "published_items": 0,      # Replace with actual count
+        "draft_items": 0,          # Replace with actual count
+        "last_updated_at": datetime.now(timezone.utc).isoformat() # Placeholder for timestamp
     }
 
 
-async def get_engagement_report_dummy(db: Session) -> Dict[str, Any]:
+async def get_nft_minting_report_dummy(db: Session) -> Dict[str, Any]:
     """
-    Placeholder: Generates a dummy engagement report.
+    Generates a dummy NFT minting report.
     """
-    logger.info("Reports Service: Generating dummy engagement report.")
+    logger.info("Reports Service: Generating dummy NFT minting report.")
+    today = date.today()
+    return [{
+        "report_name": "NFT Minting Activity Report",
+        "date_generated": datetime.now(),
+        "period_start": today - timedelta(days=30),
+        "period_end": today,
+        "total_mints_period": 500,
+        "successful_mints_period": 480,
+        "failed_mints_period": 20,
+        "top_minters_period": [
+            {"user_id": str(uuid.uuid4()), "mints": 50},
+            {"user_id": str(uuid.uuid4()), "mints": 45}
+        ],
+        "average_mint_time_seconds": 15.5
+    }]
+
+async def get_financial_overview_report_dummy(db: Session) -> Dict[str, Any]:
+    """
+    Generates a dummy financial overview report.
+    """
+    logger.info("Reports Service: Generating dummy financial overview report.")
     return {
-        "report_name": "Engagement Report",
-        "date_range": {"start": "beginning", "end": "now"},
-        "total_page_views": random.randint(1000000, 2000000),
-        "unique_visitors": random.randint(200000, 400000),
-        "average_session_duration_seconds": random.randint(60, 200),
-        "content_type_filter": "All",
-        "top_engaged_content_ids": [f"content-{random.randint(1000, 9999)}" for _ in range(5)],
-        "engagement_metrics_by_type": {
-            "Memorial Entries": {"views": random.randint(10000, 50000), "interactions": random.randint(500, 2000)},
-            "NFTs": {"views": random.randint(10000, 50000), "interactions": random.randint(500, 2000)},
-            "User Profiles": {"views": random.randint(5000, 10000), "interactions": random.randint(100, 500)}
-        }
+        "report_name": "Financial Overview Report",
+        "date_generated": datetime.now(),
+        "total_revenue": 15000.00,
+        "total_expenses": 7500.00,
+        "net_profit": 7500.00,
+        "currency": "USD",
+        "period": "Last Quarter"
+    }
+
+async def get_ipfs_cost_report_dummy(db: Session) -> Dict[str, Any]:
+    """
+    Generates a dummy IPFS cost report.
+    """
+    logger.info("Reports Service: Generating dummy IPFS cost report.")
+    return {
+        "report_name": "IPFS Storage & Retrieval Cost Report",
+        "date_generated": datetime.now(),
+        "month": "July",
+        "storage_cost_usd": 150.75,
+        "retrieval_cost_usd": 80.20,
+        "total_cost_usd": 230.95
+    }
+
+async def get_user_engagement_report_dummy(db: Session) -> Dict[str, Any]:
+    """
+    Generates a dummy user engagement report.
+    """
+    logger.info("Reports Service: Generating dummy user engagement report.")
+    return {
+        "report_name": "User Engagement Report",
+        "date_generated": datetime.now(),
+        "active_users_daily": 1200,
+        "content_views_daily": 5000,
+        "average_session_duration_minutes": 10.5,
+        "new_registrations_daily": 50
     }
 
 async def get_users_by_referral_report_dummy(db: Session) -> List[Dict[str, Any]]:
     """
-    Placeholder: Generates a dummy report on users acquired by referral.
+    Generates a dummy report on users acquired through referral programs.
     """
     logger.info("Reports Service: Generating dummy users by referral report.")
     return [
-        {
-            "referrer_identifier": "Direct/Unknown",
-            "total_referred_users": random.randint(5, 10),
-            "referred_users": [
-                {"id": str(i), "username": f"user_{i}", "email": f"user{i}@example.com", "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 365))).isoformat(), "referring_affiliate_id": None, "referring_referral_code": None}
-                for i in range(1, 8)
-            ]
-        },
-        {
-            "referrer_identifier": "aff123", # Example affiliate ID
-            "total_referred_users": random.randint(1, 5),
-            "referred_users": [
-                {"id": str(uuid.uuid4()), "username": f"ref_user_{i}", "email": f"ref_user{i}@example.com", "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 60))).isoformat(), "referring_affiliate_id": "aff123", "referring_referral_code": None}
-                for i in range(1, 4)
-            ]
-        },
-        {
-            "referrer_identifier": "ANOTHERREF", # Example referral code
-            "total_referred_users": random.randint(1, 3),
-            "referred_users": [
-                {"id": str(uuid.uuid4()), "username": f"ref_code_user_{i}", "email": f"ref_code_user{i}@example.com", "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 90))).isoformat(), "referring_affiliate_id": None, "referring_referral_code": "ANOTHERREF"}
-                for i in range(1, 2)
-            ]
-        }
+        {"referral_code": "ALPHA-123", "referred_users_count": 25, "total_commissions_usd": 125.50},
+        {"referral_code": "BETA-456", "referred_users_count": 18, "total_commissions_usd": 90.00},
+        {"referral_code": "GAMMA-789", "referred_users_count": 10, "total_commissions_usd": 50.00},
     ]
 
 async def get_affiliate_commissions_report_dummy(db: Session) -> Dict[str, Any]:
     """
-    Placeholder: Generates a dummy affiliate commissions report.
+    Generates a dummy affiliate commissions report.
     """
     logger.info("Reports Service: Generating dummy affiliate commissions report.")
-    overall_total_commissions = round(random.uniform(2000.00, 5000.00), 2)
-    overall_referred_sales_value = round(random.uniform(30000.00, 60000.00), 2)
-    overall_num_referred_transactions = random.randint(300, 600)
-
-    commissions_by_affiliate = {}
-    for _ in range(random.randint(3, 7)): # Simulate 3-7 affiliates
-        affiliate_id = uuid.uuid4().hex[:8]
-        commissions_by_affiliate[affiliate_id] = {
-            "total_commissions_earned": round(random.uniform(50.00, 1500.00), 2),
-            "referred_sales_value": round(random.uniform(1000.00, 10000.00), 2),
-            "number_of_referred_transactions": random.randint(1, 100)
-        }
-
     return {
-        "report_name": "Affiliate Commissions Report",
-        "date_range": {"start": "beginning", "end": "now"},
-        "overall_total_commissions": overall_total_commissions,
-        "overall_referred_sales_value": overall_referred_sales_value,
-        "overall_num_referred_transactions": overall_num_referred_transactions,
-        "commissions_by_affiliate": commissions_by_affiliate
+        "report_name": "Affiliate Commissions Overview",
+        "date_generated": datetime.now(),
+        "total_commissions_paid_usd": 2500.00,
+        "total_affiliates_active": 50,
+        "top_affiliates": [
+            {"user_id": str(uuid.uuid4()), "commissions_usd": 500.00},
+            {"user_id": str(uuid.uuid4()), "commissions_usd": 350.00}
+        ]
     }
-
-
-# --- Public Reports ---
-
-async def get_top_content_report_dummy(db: Session, metric: str = "views") -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy top content report.
-    """
-    logger.info(f"Reports Service: Generating dummy top content report by metric: {metric}.")
-    dummy_content = [
-        {"id": 1, "type": "Art", "status": "published", "views": 1500, "sales": 150.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(5, 20))).isoformat()},
-        {"id": 2, "type": "Music", "status": "published", "views": 2500, "sales": 250.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(2, 10))).isoformat()},
-        {"id": 3, "type": "Writing", "status": "published", "views": 800, "sales": 80.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 30))).isoformat()},
-        {"id": 4, "type": "Art", "status": "pending", "views": 50, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 3))).isoformat()},
-        {"id": 5, "type": "Music", "status": "published", "views": 1200, "sales": 120.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 24))).isoformat()},
-        {"id": 6, "type": "Writing", "status": "draft", "views": 100, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(7, 14))).isoformat()},
-        {"id": 7, "type": "Art", "status": "published", "views": 3000, "sales": 300.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(12, 48))).isoformat()},
-        {"id": 8, "type": "Music", "status": "published", "views": 4000, "sales": 400.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(3, 8))).isoformat()},
-        {"id": 9, "type": "Art", "status": "published", "views": 2000, "sales": 200.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(6, 18))).isoformat()},
-        {"id": 10, "type": "Writing", "status": "published", "views": 1000, "sales": 100.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(20, 40))).isoformat()},
-        {"id": 11, "type": "Photography", "status": "published", "views": 900, "sales": 90.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(2, 10))).isoformat()},
-        {"id": 12, "type": "Video", "status": "published", "views": 5000, "sales": 500.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 5))).isoformat()},
-        {"id": 13, "type": "Art", "status": "published", "views": 1800, "sales": 180.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(10, 30))).isoformat()},
-    ]
-
-    # Sort content by the requested metric (views or sales) in descending order
-    if metric == "views":
-        sorted_content = sorted(dummy_content, key=lambda x: x["views"], reverse=True)
-    elif metric == "sales":
-        sorted_content = sorted(dummy_content, key=lambda x: x["sales"], reverse=True)
-    else:
-        sorted_content = dummy_content # Default sort if metric is not recognized
-
-    # Return top N items (e.g., top 10)
-    return {"top_content": sorted_content[:10], "metric": metric}
-
-
-async def get_trending_content_report_dummy(db: Session, time_period_hours: int = 24) -> Dict[str, Any]:
-    """
-    Placeholder: Generates a dummy trending content report based on recent views and a simulated 'trend score'.
-    """
-    logger.info(f"Reports Service: Generating dummy trending content report for last {time_period_hours} hours.")
-
-    dummy_content = [
-        {"id": 1, "type": "Art", "status": "published", "views": 1500, "sales": 150.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(5, 20))).isoformat()},
-        {"id": 2, "type": "Music", "status": "published", "views": 2500, "sales": 250.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(2, 10))).isoformat()},
-        {"id": 3, "type": "Writing", "status": "published", "views": 800, "sales": 80.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(10, 30))).isoformat()},
-        {"id": 4, "type": "Art", "status": "pending", "views": 50, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(1, 3))).isoformat()},
-        {"id": 5, "type": "Music", "status": "published", "views": 1200, "sales": 120.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 24))).isoformat()},
-        {"id": 6, "type": "Writing", "status": "draft", "views": 100, "sales": 0.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(7, 14))).isoformat()},
-        {"id": 7, "type": "Art", "status": "published", "views": 3000, "sales": 300.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(12, 48))).isoformat()},
-        {"id": 8, "type": "Music", "status": "published", "views": 4000, "sales": 400.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(3, 8))).isoformat()},
-        {"id": 9, "type": "Art", "status": "published", "views": 2000, "sales": 200.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(6, 18))).isoformat()},
-        {"id": 10, "type": "Writing", "status": "published", "views": 1000, "sales": 100.00, "created_at": (datetime.utcnow() - timedelta(days=random.randint(20, 40))).isoformat()},
-        {"id": 11, "type": "Photography", "status": "published", "views": 900, "sales": 90.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(2, 10))).isoformat()},
-        {"id": 12, "type": "Video", "status": "published", "views": 5000, "sales": 500.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(1, 5))).isoformat()},
-        {"id": 13, "type": "Art", "status": "published", "views": 1800, "sales": 180.00, "created_at": (datetime.utcnow() - timedelta(hours=random.randint(10, 30))).isoformat()},
-    ]
-
-    # Filter content created within the last 'time_period_hours' and calculate a dummy trend score
-    trending_items = []
-    time_threshold = datetime.utcnow() - timedelta(hours=time_period_hours)
-
-    for item in dummy_content:
-        # Only consider published content for trending
-        if item["status"] == "published":
-            item_created_at = datetime.fromisoformat(item["created_at"])
-            # Simple trend score: recent views + recent sales, weighted
-            # For dummy, let's just use current views and add a recency factor
-            recency_factor = 1.0
-            if item_created_at > time_threshold:
-                time_diff_hours = (datetime.utcnow() - item_created_at).total_seconds() / 3600
-                if time_diff_hours > 0:
-                    recency_factor = max(0.5, 1.0 - (time_diff_hours / time_period_hours)) # More recent = higher factor
-
-            trend_score = item["views"] * recency_factor + (item["sales"] * 5) # Sales weighted more
-            item["trend_score"] = round(trend_score, 2)
-            trending_items.append(item)
-
-    # Sort by trend_score in descending order
-    sorted_trending = sorted(trending_items, key=lambda x: x.get("trend_score", 0), reverse=True)
-
-    return {"trending_content": sorted_trending[:6], "time_period_hours": time_period_hours}

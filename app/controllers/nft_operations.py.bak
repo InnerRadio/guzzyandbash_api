@@ -1,0 +1,339 @@
+# app/controllers/nft_operations.py
+# This file defines the API endpoints related to NFT operations,
+# including minting and retrieval, with integrated XRPL interaction.
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from datetime import datetime
+import uuid
+import asyncio
+import sys
+import logging
+import json # NEW: Import json for logging full response
+
+# Import application-specific modules
+from app.database import get_db # Dependency to get a database session
+from app.schemas.user_schemas import UserResponse # For current_user dependency
+from app.models.nft import MintedMemorialEntry # SQLAlchemy model for minted NFTs
+from app.xrpl_client import XRPLClient # XRPL client for interacting with the ledger
+from app.dependencies import get_current_active_user # Dependency for authentication
+from app.schemas.nft_schemas import NFTMintRequest, UserNFTItem # Import NFT schemas
+
+# --- Custom Logger Configuration for this module ---
+# Get the logger for this module
+logger = logging.getLogger(__name__)
+# Set the logging level to INFO for general operation, adjust as needed (e.g., WARNING, ERROR)
+logger.setLevel(logging.INFO)
+
+# Create handlers for stdout and stderr if they don't already exist
+# This prevents adding multiple handlers on successive reloads in development
+if not any(isinstance(handler, logging.StreamHandler) for handler in logger.handlers):
+    # Create a handler that writes log messages to sys.stdout
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG) # Set handler level to DEBUG
+    # Create a formatter and add it to the handler
+    formatter = logging.Formatter('%(levelname)s: %(asctime)s - %(name)s - %(message)s')
+    stdout_handler.setFormatter(formatter)
+    # Add the handler to the logger
+    logger.addHandler(stdout_handler)
+
+    # Create a handler that writes log messages to sys.stderr (for errors)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.ERROR) # Set handler level to ERROR for stderr
+    stderr_handler.setFormatter(formatter)
+    logger.addHandler(stderr_handler)
+
+
+# Define the APIRouter for NFT operations
+# The prefix for these routes is defined in main.py as "/nft"
+router = APIRouter(tags=["NFT Operations"]) # REMOVED redundant prefix here. It is applied in main.py
+
+
+# --- NFT Minting Endpoint ---
+
+@router.post(
+    "/mint-memorial-entry-nft", # CORRECTED: Removed the redundant "/nft" from the path
+    response_model=UserNFTItem,
+    status_code=status.HTTP_201_CREATED,
+    summary="Mint a Memorial Entry NFT",
+    description="Mints a new Memorial Entry NFT on the XRPL and records it in the database. Requires authentication."
+)
+
+# --- XRPL-specific imports ---
+# from xrpl.wallet import Wallet
+# from xrpl.models.requests import AccountInfo, Submit
+# from xrpl.clients import JsonRpcClient
+# from xrpl.models.transactions import NFTokenMint
+# from xrpl.transaction import safe_sign_and_submit_transaction, send_reliable_submission
+# from xrpl.utils import drops_to_xrp, xrp_to_drops
+# from xrpl.core.keypairs import derive_keypair # For standalone keypair generation if needed
+# from xrpl.asyncio.clients import AsyncJsonRpcClient
+# from xrpl.asyncio.transaction import safe_sign_and_submit_xrp_transaction # For async operations
+
+# --- Custom Module Imports ---
+from app.dependencies import get_db, get_current_active_user, get_current_active_superuser
+from app.schemas.user_schemas import UserResponse, NFTMintRequest, UserNFTItem
+from app.models.nft import MintedMemorialEntry
+from app.models.user import User
+from app.core.config import settings
+
+# --- Exception Handling for XRPL ---
+class XRPLRequestFailureException(Exception):
+    """Custom exception for XRPL request failures."""
+    def __init__(self, message, response=None):
+        super().__init__(message)
+        self.response = response
+
+# Define XRPL Testnet client globally for reuse
+# JSON_RPC_URL = "https://s.altnet.rippletest.net:51234/" # XRPL Testnet
+# CLIENT = JsonRpcClient(JSON_RPC_URL)
+# ASYNC_CLIENT = AsyncJsonRpcClient(JSON_RPC_URL)
+
+# Temporary: Mock XRPL Client for local development without actual XRPL connection
+# In a real scenario, you'd have proper dependency injection for this
+class MockXRPLClient:
+    def __init__(self):
+        self.account_info_response = {
+            "result": {
+                "account_data": {
+                    "Account": "r...",
+                    "Balance": "1000000000",
+                    "Sequence": 123
+                },
+                "status": "success"
+            }
+        }
+        self.submit_response = {
+            "result": {
+                "engine_result": "tesSUCCESS",
+                "engine_result_code": 0,
+                "engine_result_message": "The transaction was applied.",
+                "tx_json": {
+                    "hash": "MOCK_TX_HASH_12345",
+                    "meta": {"TransactionResult": "tesSUCCESS"}
+                }
+            }
+        }
+        self.nft_mint_response = {
+            "result": {
+                "engine_result": "tesSUCCESS",
+                "engine_result_code": 0,
+                "engine_result_message": "The transaction was applied.",
+                "tx_json": {
+                    "hash": "MOCK_NFT_TX_HASH_XYZ",
+                    "meta": {"TransactionResult": "tesSUCCESS"}
+                },
+                "NFTokenID": "MOCK_NFTOKEN_ID_ABC" # This is a common field in successful mint responses
+            }
+        }
+
+    async def request(self, request_obj):
+        logger.info(f"MockXRPLClient: Received request type: {type(request_obj).__name__}")
+        if isinstance(request_obj, AccountInfo):
+            return self.account_info_response
+        elif isinstance(request_obj, Submit):
+            # Simulate a successful NFT mint submission
+            if request_obj.transaction.get("TransactionType") == "NFTokenMint":
+                logger.info("MockXRPLClient: Simulating successful NFTokenMint.")
+                return self.nft_mint_response
+            return self.submit_response
+        else:
+            logger.warning(f"MockXRPLClient: Unhandled request type: {type(request_obj).__name__}")
+            raise XRPLRequestFailureException(f"MockXRPLClient: Unhandled request type: {type(request_obj).__name__}")
+
+# Use the mock client for now. In production, this would be swapped with real JsonRpcClient/AsyncJsonRpcClient
+# CLIENT = MockXRPLClient() # For synchronous calls if needed by some XRPL library functions
+ASYNC_CLIENT = MockXRPLClient() # We will primarily use the async client
+
+# Helper function to get XRPL Wallet (from settings)
+def get_xrpl_wallet():
+    """Retrieves the XRPL wallet from settings."""
+    # For a real application, you'd securely load this from environment variables
+    # or a secrets manager. This is for demonstration with a testnet seed.
+    if not settings.XRPL_SEED:
+        logger.error("XRPL_SEED is not configured in settings. Cannot create wallet.")
+        raise ValueError("XRPL_SEED is not configured.")
+    try:
+        # When using xrpl-py, Wallet.from_seed() handles the derivation
+        # This is a placeholder as the actual Wallet class might need a client
+        # For direct keypair derivation:
+        # public_key, private_key = derive_keypair(settings.XRPL_SEED)
+        # return Wallet(seed=settings.XRPL_SEED, sequence=0) # Sequence will be updated by XRPL
+        logger.info("Using mock wallet for XRPL operations.")
+        return "MOCK_XRPL_WALLET" # Return a placeholder for the mock scenario
+    except Exception as e:
+        logger.error(f"Failed to load XRPL wallet from seed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initialize XRPL wallet."
+        )
+
+# --- NFT Minting Endpoint ---
+
+@router.post("/nft/mint", response_model=NFTMintResponse, status_code=status.HTTP_201_CREATED)
+async def mint_nft(
+    mint_request: NFTMintRequest,
+    db: Session = Depends(get_db),
+    current_user: UserResponse = Depends(get_current_active_user) # Ensures user is logged in
+):
+    """
+    Mints a new NFT on the XRPL Testnet.
+    Currently uses a mock XRPL client for development.
+    """
+    logger.info(f"Minting NFT for user: {current_user.username} (ID: {current_user.id})")
+    logger.debug(f"Mint request details: {mint_request.model_dump_json()}")
+
+    # In a real XRPL integration, you'd get the actual wallet and sequence
+    # xrpl_wallet = get_xrpl_wallet() # This would return an xrpl.wallet.Wallet object
+    # Example of getting account info to get current sequence:
+    # account_info = await ASYNC_CLIENT.request(AccountInfo(account=xrpl_wallet.classic_address))
+    # xrpl_wallet.sequence = account_info.result["account_data"]["Sequence"]
+
+    # For mock, we'll simulate these values
+    mock_xrpl_wallet_address = "rMOCK_WALLET_ADDRESS"
+    mock_xrpl_sequence = 12345
+
+    try:
+        # 1. Prepare the NFTokenMint transaction (using mock values)
+        # In a real scenario, the data_uri would point to actual IPFS/metadata
+        transaction = {
+            "Account": mock_xrpl_wallet_address, # This would be xrpl_wallet.classic_address
+            "TransactionType": "NFTokenMint",
+            "URI": mint_request.metadata_uri.encode("utf-8").hex(), # URI must be hex-encoded
+            "Flags": 8,  # tfTransferable (can be traded) - adjust flags as needed
+            "TokenTaxon": 0, # Placeholder, categorize your NFTs
+            "Fee": "12", # Standard fee in drops (12 drops is 0.000012 XRP)
+            "Sequence": mock_xrpl_sequence # This would be xrpl_wallet.sequence
+        }
+
+        logger.debug(f"Prepared XRPL mint transaction (mock): {transaction}")
+
+        # 2. Sign and submit the transaction (using mock client)
+        # In a real scenario, use safe_sign_and_submit_transaction or its async equivalent
+        # For the mock, we call the mock client's request method directly
+        submit_result = await ASYNC_CLIENT.request(Submit(transaction=transaction))
+        logger.debug(f"XRPL Submit result (mock): {submit_result}")
+
+        if submit_result.get("result", {}).get("engine_result") != "tesSUCCESS":
+            error_message = submit_result.get("result", {}).get("engine_result_message", "Unknown XRPL error")
+            logger.error(f"XRPL minting failed: {error_message} | Full response: {submit_result}")
+            raise XRPLRequestFailureException(
+                f"XRPL NFT minting failed: {error_message}",
+                response=submit_result
+            )
+
+        # Extract NFTokenID and transaction hash from the mock response
+        # Note: The exact structure might vary slightly in a real XRPL response
+        nft_token_id = submit_result.get("result", {}).get("NFTokenID", "MOCK_NFTOKEN_ID_UNDEFINED")
+        transaction_hash = submit_result.get("result", {}).get("tx_json", {}).get("hash", "MOCK_TX_HASH_UNDEFINED")
+
+        if not nft_token_id or not transaction_hash:
+            logger.warning(f"Could not extract NFT Token ID or Transaction Hash from XRPL response: {submit_result}")
+            # Attempt to extract if 'meta' is present and contains 'nftoken_id' (common in validated transactions)
+            if 'meta' in submit_result.get('result', {}).get('tx_json', {}):
+                # This path is more common for _validated_ transactions, not initial submit
+                # For now, rely on NFTokenID at the top level of the result as mock provides
+                pass
+
+
+        logger.info(f"Successfully minted NFT with Token ID: {nft_token_id}, Transaction Hash: {transaction_hash}")
+
+        # 3. Save minted NFT details to your database
+        new_nft_entry = MintedMemorialEntry(
+            memorial_entry_id=str(uuid.uuid4()), # Generate a new UUID for your internal memorial entry ID
+            nft_token_id=nft_token_id,
+            transaction_hash=transaction_hash,
+            minter_user_id=current_user.id,
+            metadata_uri=mint_request.metadata_uri,
+            name=mint_request.name,
+            description=mint_request.description,
+            image_uri=mint_request.image_uri,
+            xrpl_response=json.dumps(submit_result) # Store full XRPL response as JSON string
+        )
+        db.add(new_nft_entry)
+        db.commit()
+        db.refresh(new_nft_entry)
+
+        logger.info(f"NFT record saved to database with ID: {new_nft_entry.id}")
+
+        return NFTMintResponse(
+            nft_id=new_nft_entry.id,
+            memorial_entry_id=new_nft_entry.memorial_entry_id,
+            nft_token_id=new_nft_entry.nft_token_id,
+            transaction_hash=new_nft_entry.transaction_hash,
+            minted_at=new_nft_entry.minted_at,
+            metadata_uri=new_nft_entry.metadata_uri,
+            name=new_nft_entry.name,
+            description=new_nft_entry.description,
+            image_uri=new_nft_entry.image_uri,
+            minter_user_id=new_nft_entry.minter_user_id,
+            xrpl_response=submit_result # Return the dictionary here, Pydantic will serialize
+        )
+
+    except HTTPException:
+        raise
+    except XRPLRequestFailureException as e:
+        # Enhanced error logging: log the full response if available
+        error_detail = f"XRPL Request Failed: {e}"
+        if hasattr(e, 'response') and e.response:
+            xrpl_error_data = e.response.get('result', {})
+            engine_result = xrpl_error_data.get('engine_result')
+            engine_result_message = xrpl_error_data.get('engine_result_message')
+
+            error_detail += f" (Full XRPL Response: {e.response})" # Corrected: Added closing double quote here
+
+            if engine_result:
+                error_detail += f" (Engine Result: {engine_result}"
+                if engine_result_message:
+                    error_detail += f", Message: {engine_result_message})"
+                else:
+                    error_detail += ")"
+            else:
+                error_detail += f" (XRPL Result Data: {xrpl_error_data})"
+        logger.error(f"XRPL Request Exception during NFT minting: {error_detail}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail
+        )
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during NFT minting in controller: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {e}"
+        )
+
+# --- NFT Retrieval Endpoint ---
+
+@router.get("/nft/{nft_id}", response_model=UserNFTItem)
+async def get_nft_details(
+    nft_id: str,
+    db: Session = Depends(get_db),
+    current_user: UserResponse = Depends(get_current_active_user) # User must be logged in to view NFTs
+):
+    """
+    Retrieves details of a specific minted NFT by its ID.
+    """
+    logger.info(f"Fetching NFT details for ID: {nft_id} for user: {current_user.id}")
+
+    nft_entry = db.query(MintedMemorialEntry).filter(MintedMemorialEntry.id == nft_id).first()
+
+    if not nft_entry:
+        logger.warning(f"NFT with ID {nft_id} not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="NFT not found"
+        )
+
+    # You might add logic here to check if the current_user has permission to view this NFT
+    # For now, any logged-in user can view any NFT if they have the ID.
+
+    return UserNFTItem(
+        nft_id=nft_entry.id,
+        title=nft_entry.name if nft_entry.name else "Untitled NFT",
+        token_id=nft_entry.nft_token_id,
+        minted_at=nft_entry.minted_at,
+        price_usd=0.0, # Placeholder, if NFTs have a price field
+        is_listed_for_sale=False # Placeholder, if NFTs have a sales status
+    )

@@ -29,8 +29,10 @@ from app.database import Base
 # Use the absolute import path from the project root.
 # Based on your app/models/ directory listing:
 import app.models.user
+import app.models.content # NEW: Added to ensure Content model is discovered by Alembic
 import app.models.affiliate # Added for AffiliateClick model
-import app.models.nft       # Added for MintedMemorialEntry model
+import app.models.nft         # Added for MintedMemorialEntry model
+import app.models.activity_log # NEW: Added to ensure ActivityLog model is discovered by Alembic
 # If you have a specific 'Post' model in app/models/post.py, uncomment/add:
 # import app.models.post
 
@@ -95,6 +97,7 @@ def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
     In this scenario we need to create an Engine
+
     and associate a connection with the context.
     """
     # The URL should already be set in config.set_main_option by the top-level code.
@@ -136,4 +139,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

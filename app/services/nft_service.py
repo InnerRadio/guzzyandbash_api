@@ -1,135 +1,125 @@
-# /var/www/tarot-api/guzzy_and_bash_productions/app/services/nft_service.py
+# app/services/nft_service.py
+# This file contains the business logic for NFT-related operations,
+# primarily interacting with database models. XRPL interaction is handled
+# by the controller and app.xrpl.wallet.
 
+# Standard library imports
+from typing import List, Optional, Dict, Any
+from datetime import datetime
 import uuid
-from sqlalchemy.orm import Session
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
-import random
-import json
 import logging
 
-# Configure logging
+# Configure logging for this module
 logger = logging.getLogger(__name__)
 
-# NEW: Import the actual Pydantic models
-from app.models.nft import MintedMemorialEntryResponse
-from app.models.user import UserResponse, UserRole # UserRole needed for dummy UserResponse
+# SQLAlchemy imports for database session management
+from sqlalchemy.orm import Session
+from sqlalchemy import select # Import select for modern SQLAlchemy queries
+from sqlalchemy import exc # For database exceptions
 
-# Dummy data for MintedMemorialEntry. We'll simulate DB storage here.
-# Now stores actual MintedMemorialEntryResponse objects.
-_dummy_minted_nfts: List[MintedMemorialEntryResponse] = []
+# Application-specific imports
+# CORRECTED: Import NFT instead of MintedMemorialEntry
+from app.models.nft import NFT
+from app.models.user import User, UserRole # User and UserRole might be needed for context, but not direct CRUD here
 
-# REMOVED: DummyMintedMemorialEntryResponse class is no longer needed.
+# --- NFT Service Functions (Database Operations) ---
 
-
-async def mint_memorial_entry_nft_dummy(
-    db: Session, # Session is still passed, but not used for dummy data
-    memorial_entry_id: str,
-    token_uri: str,
-    category: str,
-    minter_user_id: str, # This is the UUID
-    minter_username: str # NEW: We need the username to create a dummy UserResponse
-) -> Dict[str, Any]:
+# CORRECTED: Function name and return type to reflect NFT model
+def get_all_nfts(db: Session) -> List[NFT]:
     """
-    Placeholder: Simulates minting a memorial entry NFT.
-    Checks for duplicates and generates a dummy NFTokenID and transaction hash.
-    Returns a dictionary matching the controller's expected success response.
+    Retrieves all NFTs from the database.
     """
-    logger.info(f"NFT Service: Simulating mint for memorial_entry_id: {memorial_entry_id}, by user_id: {minter_user_id}, username: {minter_username}")
+    logger.info("NFT Service: Retrieving all NFTs from database.")
+    # CORRECTED: Use NFT model
+    return db.scalars(select(NFT)).all()
 
-    # Simulate duplicate check from the dummy storage
-    for nft in _dummy_minted_nfts:
-        if nft.memorial_entry_id == memorial_entry_id:
-            logger.warning(f"NFT Service: Duplicate memorial_entry_id detected: {memorial_entry_id}")
-            # Simulate a 409 Conflict, but return a dict as if it was a successful lookup
-            return {
-                "message": "NFT for memorial entry ID already minted (dummy).",
-                "transaction_hash": nft.transaction_hash,
-                "nft_token_id": nft.nft_token_id,
-                "initiated_by_user": minter_username, # Changed to username for consistency
-                "xrpl_response_result": "dummy_duplicate_success",
-                "is_duplicate": True # Custom field to indicate this is a simulated duplicate response
-            }
+# CORRECTED: Function name and parameter/return type
+def get_nft_by_id(db: Session, nft_id: str) -> Optional[NFT]:
+    """
+    Retrieves a specific NFT by its internal database ID.
+    """
+    logger.info(f"NFT Service: Retrieving NFT with internal ID '{nft_id}'.")
+    # CORRECTED: Use NFT model
+    return db.scalar(select(NFT).filter(NFT.id == nft_id))
 
-    # Simulate XRPL transaction hash and NFTokenID
-    dummy_transaction_hash = f"0x{uuid.uuid4().hex}"
-    dummy_nft_token_id = f"0008{uuid.uuid4().hex[:16].upper()}" # Simulate a valid XRPL NFTokenID format
+# CORRECTED: Function name and parameter/return type
+def get_nft_by_uuid(db: Session, nft_uuid: str) -> Optional[NFT]:
+    """
+    Retrieves a specific NFT by its external UUID.
+    """
+    logger.info(f"NFT Service: Retrieving NFT with external UUID '{nft_uuid}'.")
+    # CORRECTED: Use NFT model
+    return db.scalar(select(NFT).filter(NFT.uuid == nft_uuid))
 
-    # Create a dummy UserResponse for the minter_user field
-    dummy_minter_user = UserResponse(
-        id=minter_user_id,
-        username=minter_username,
-        email=f"{minter_username}@example.com", # Dummy email
-        is_active=True,
-        created_at=datetime.utcnow() - timedelta(days=random.randint(10, 100)), # Dummy date
-        last_updated_at=datetime.utcnow(),
-        role=UserRole.CREATOR, # Assume creator role for minters
-        permissions_level="standard"
+# CORRECTED: Function name and parameter/return type
+def get_nft_by_token_id(db: Session, token_id: int) -> Optional[NFT]:
+    """
+    Retrieves a specific NFT by its token ID.
+    """
+    logger.info(f"NFT Service: Retrieving NFT with token ID '{token_id}'.")
+    # CORRECTED: Use NFT model
+    return db.scalar(select(NFT).filter(NFT.token_id == token_id))
+
+# CORRECTED: Function name and parameter/return type, and internal creation
+def create_nft_record(
+    db: Session,
+    token_id: int,
+    name: str,
+    description: Optional[str],
+    image_url: str,
+    metadata_url: Optional[str],
+    owner_id: str,
+    content_id: str
+) -> NFT:
+    """
+    Creates a new NFT record in the database.
+    """
+    logger.info(f"NFT Service: Creating new NFT record for token_id: {token_id}, owner_id: {owner_id}, content_id: {content_id}.")
+
+    # The NFT model's `id` and `uuid` fields have defaults (uuid.uuid4)
+    # The `minted_at` and `last_updated_at` also have defaults (func.now())
+    # So, we only need to pass the explicitly required fields.
+    new_nft = NFT(
+        token_id=token_id,
+        name=name,
+        description=description,
+        image_url=image_url,
+        metadata_url=metadata_url,
+        owner_id=owner_id,
+        content_id=content_id
     )
 
-    # Instantiate MintedMemorialEntryResponse directly
-    new_minted_entry = MintedMemorialEntryResponse(
-        id=str(uuid.uuid4()), # Generate a new UUID for the NFT record itself
-        memorial_entry_id=memorial_entry_id,
-        nft_token_id=dummy_nft_token_id,
-        transaction_hash=dummy_transaction_hash,
-        metadata_uri=token_uri,
-        # xrpl_response is omitted from MintedMemorialEntryResponse, as per models/nft.py
-        minter_user_id=minter_user_id,
-        minted_at=datetime.utcnow(), # Use UTC now
-        name=f"Memorial for {memorial_entry_id}", # Dummy name
-        description=f"A digital memorial for category: {category}", # Dummy description
-        image_uri=f"{token_uri}/image.jpg", # Dummy image_uri
-        minter_user=dummy_minter_user # Assign the dummy UserResponse
-    )
+    db.add(new_nft)
+    try:
+        db.commit()
+        db.refresh(new_nft) # Refresh to get the generated ID and timestamps
+        logger.info(f"NFT Service: Successfully saved NFT record for token_id: {token_id}. DB ID: {new_nft.id}")
+        return new_nft
+    except exc.IntegrityError as e:
+        db.rollback()
+        logger.error(f"IntegrityError saving NFT record for token_id {token_id}: {e}", exc_info=True)
+        raise # Re-raise for controller to handle
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Unexpected error saving NFT record for token_id {token_id}: {e}", exc_info=True)
+        raise # Re-raise for controller to handle
 
-    _dummy_minted_nfts.append(new_minted_entry)
-    logger.info(f"NFT Service: Successfully simulated mint for {memorial_entry_id}. NFTokenID: {dummy_nft_token_id}")
-
-    return {
-        "message": "NFT mint transaction submitted successfully to XRPL Testnet (dummy).",
-        "transaction_hash": dummy_transaction_hash,
-        "nft_token_id": dummy_nft_token_id,
-        "initiated_by_user": minter_username, # Changed to username for consistency
-        "xrpl_response_result": "tesSUCCESS"
-    }
-
-
-async def get_nfts_by_minter_user_dummy(
-    db: Session, # Session is still passed, but not used for dummy data
-    minter_user_id: str
-) -> List[MintedMemorialEntryResponse]: # CORRECTED: Return type is List[MintedMemorialEntryResponse]
+# CORRECTED: Function name and return type
+def get_nfts_by_minter_user(
+    db: Session,
+    minter_user_id: str # Renamed parameter for consistency with NFT model's 'owner_id' if needed
+) -> List[NFT]:
     """
-    Placeholder: Retrieves all NFTs minted by a specific user from dummy data.
-    Returns a list of MintedMemorialEntryResponse objects.
+    Retrieves all NFTs minted by a specific user from the database.
+    Note: The NFT model uses 'owner_id' for the minter.
     """
-    logger.info(f"NFT Service: Retrieving NFTs for minter_user_id: {minter_user_id} (dummy)")
-    
-    # Filter dummy NFTs by minter_user_id
-    # _dummy_minted_nfts already stores MintedMemorialEntryResponse objects
-    user_nfts = [nft for nft in _dummy_minted_nfts if nft.minter_user_id == minter_user_id]
+    logger.info(f"NFT Service: Retrieving NFTs for owner_id: {minter_user_id} from database.")
+    # CORRECTED: Use NFT model and 'owner_id' column
+    return db.scalars(select(NFT).filter(NFT.owner_id == minter_user_id)).all()
 
-    if not user_nfts:
-        logger.warning(f"NFT Service: No dummy NFTs found for user: {minter_user_id}")
-        return [] # Return empty list if no NFTs found
+# Placeholder for potential update and delete functions if needed later
+# def update_nft_record(...):
+#     pass
 
-    return user_nfts
-
-
-async def get_nft_by_token_id_dummy(
-    db: Session, # Session is still passed, but not used for dummy data
-    nft_token_id: str
-) -> Optional[MintedMemorialEntryResponse]: # CORRECTED: Return type is Optional[MintedMemorialEntryResponse]
-    """
-    Placeholder: Retrieves a single NFT by its NFTokenID from dummy data.
-    Returns a MintedMemorialEntryResponse object or None.
-    """
-    logger.info(f"NFT Service: Retrieving NFT by token ID: {nft_token_id} (dummy)")
-
-    # Find the NFT in dummy storage
-    for nft in _dummy_minted_nfts:
-        if nft.nft_token_id == nft_token_id:
-            return nft
-    
-    logger.warning(f"NFT Service: Dummy NFT with NFTokenID '{nft_token_id}' not found.")
-    return None # Return None if not found
+# def delete_nft_record(...):
+#     pass
